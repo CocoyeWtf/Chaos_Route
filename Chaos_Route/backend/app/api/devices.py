@@ -231,8 +231,41 @@ async def register_device(
         raise HTTPException(status_code=404, detail="Invalid registration code")
     if not device.is_active:
         raise HTTPException(status_code=400, detail="Device is deactivated")
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # Garde anti-usurpation (ticket #13) : un code d'enregistrement est lie a UN seul
+    # appareil physique. S'il est deja utilise par un autre appareil, on refuse au lieu
+    # d'ecraser silencieusement l'identite (ce qui permettait a n'importe quel telephone
+    # possedant le code de se faire passer pour la tablette d'un PDV). Pour re-enregistrer
+    # un nouveau telephone, un admin doit d'abord reinitialiser l'appareil (reset-identity).
+    #
+    # Anti-impersonation guard: a registration code binds to a SINGLE physical device.
+    # If already bound to another device, reject instead of silently overwriting. Re-binding
+    # a new phone requires an admin reset-identity first.
+    if device.device_identifier and device.device_identifier != data.device_identifier:
+        db.add(AuditLog(
+            entity_type="device", entity_id=device.id, action="REGISTER_REJECTED",
+            changes=f'{{"reason":"code_deja_utilise","registration_code":"{device.registration_code}"}}',
+            user="public:register", timestamp=now,
+        ))
+        await db.flush()
+        raise HTTPException(
+            status_code=409,
+            detail="Ce code d'enregistrement est deja utilise par un autre appareil. "
+                   "Demandez a un administrateur de reinitialiser l'appareil.",
+        )
+
+    is_new_binding = device.device_identifier != data.device_identifier
     # Mettre a jour l'identifiant physique / Update the physical identifier
     device.device_identifier = data.device_identifier
-    device.registered_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if is_new_binding:
+        device.registered_at = now
+        db.add(AuditLog(
+            entity_type="device", entity_id=device.id, action="REGISTERED",
+            changes=f'{{"pdv_id":{device.pdv_id if device.pdv_id is not None else "null"},'
+                    f'"registration_code":"{device.registration_code}"}}',
+            user="public:register", timestamp=now,
+        ))
     await db.flush()
     return device

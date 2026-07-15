@@ -57,7 +57,7 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": false
           }
         }
       ],
@@ -87,13 +87,8 @@
         "projectId": "507e74dc-b8be-43cb-8ed9-22e4fa405a28"
       }
     },
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
     "updates": {
-      "url": "https://u.expo.dev/507e74dc-b8be-43cb-8ed9-22e4fa405a28",
-      "checkAutomatically": "NEVER",
-      "fallbackToCacheTimeout": 0
+      "enabled": false
     },
     "owner": "cocoye"
   }

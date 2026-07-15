@@ -45,6 +45,7 @@ export default function RootLayout() {
   const [updateAvailable, setUpdateAvailable] = useState(false)
   const [updateVersion, setUpdateVersion] = useState('')
   const [downloadUrl, setDownloadUrl] = useState('')
+  const [updateSha256, setUpdateSha256] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
 
   // Kiosk mode state
@@ -69,6 +70,7 @@ export default function RootLayout() {
         setUpdateAvailable(true)
         setUpdateVersion(versionInfo.version)
         setDownloadUrl(versionInfo.download_url)
+        setUpdateSha256(versionInfo.sha256 ?? null)
       }
     })()
   }, [])
@@ -125,7 +127,7 @@ export default function RootLayout() {
   const handleUpdate = async () => {
     setDownloading(true)
     try {
-      await downloadAndInstallApk(downloadUrl)
+      await downloadAndInstallApk(downloadUrl, updateSha256)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       console.error('Update failed:', msg)

@@ -5,6 +5,8 @@ le navigateur s'ouvre sur cette page qui propose le telechargement de l'APK
 et affiche le code d'enregistrement.
 """
 
+import hashlib
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from pathlib import Path
@@ -15,6 +17,35 @@ router = APIRouter()
 
 # Dossier pour stocker l'APK / Directory for APK storage
 APK_DIR = Path(__file__).resolve().parent.parent.parent / "apk"
+
+# Cache de l'empreinte SHA-256 de l'APK (invalidé si mtime/taille changent) /
+# APK SHA-256 fingerprint cache (invalidated on mtime/size change)
+_apk_hash_cache: dict = {"mtime": None, "size": None, "sha256": None}
+
+
+def _apk_sha256(apk_path: Path) -> str | None:
+    """Empreinte SHA-256 de l'APK servi, pour vérification d'intégrité côté app.
+
+    Permet à l'app de s'assurer que l'APK téléchargé est bien l'officiel (non
+    altéré) avant de lancer l'installeur Android. Calculé par blocs + mis en cache.
+    """
+    try:
+        st = apk_path.stat()
+    except OSError:
+        return None
+    if (
+        _apk_hash_cache["sha256"]
+        and _apk_hash_cache["mtime"] == st.st_mtime
+        and _apk_hash_cache["size"] == st.st_size
+    ):
+        return _apk_hash_cache["sha256"]
+    h = hashlib.sha256()
+    with open(apk_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    digest = h.hexdigest()
+    _apk_hash_cache.update({"mtime": st.st_mtime, "size": st.st_size, "sha256": digest})
+    return digest
 
 # Version courante de l'app mobile / Current mobile app version
 # Mettre a jour a chaque build APK / Update on each APK build
@@ -35,11 +66,15 @@ FORCE_UPDATE = False
 async def get_app_version():
     """Version courante de l'app + URL telechargement / Current app version + download URL."""
     base_url = settings.PUBLIC_URL.rstrip("/")
-    apk_exists = (APK_DIR / "cmro-driver.apk").is_file()
+    apk_file = APK_DIR / "cmro-driver.apk"
+    apk_exists = apk_file.is_file()
     return {
         "version": APP_VERSION,
         "build_number": APP_BUILD_NUMBER,
         "download_url": f"{base_url}/app/download/cmro-driver.apk" if apk_exists else None,
+        # Empreinte SHA-256 pour vérification d'intégrité de l'APK téléchargé /
+        # SHA-256 for downloaded APK integrity check
+        "sha256": _apk_sha256(apk_file) if apk_exists else None,
         "force_update": FORCE_UPDATE,
     }
 

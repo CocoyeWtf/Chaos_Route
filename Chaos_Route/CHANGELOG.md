@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Tickets #7–#12 — Encodage de retours PDV (app mobile + web)
+- **#8 — Restriction des supports de retour.** L'inventaire PDV mobile
+  (`/driver/inventory-lookup` + `/driver/inventory`) n'accepte plus que les
+  supports de retour autorisés : préfixes `CO`/`PA`/`PL`/`RE` et `SF 40040` /
+  `SF 40104` / `SF 40204`. Les casiers à bière (`SF 3xxxx`), qui relèvent du flux
+  consignes dédié, sont exclus. Règle centralisée dans
+  `app/utils/support_rules.py`. Côté app : recherche d'un support en tapant son
+  nom (inventaire PDV + inventaire base) et affichage du **libellé seul** (plus le
+  code) sur l'écran inventaire PDV.
+- **#10 / #7 — Création de la demande CMRO + impression à la validation.** À la
+  validation d'un inventaire PDV, l'app affiche un **récapitulatif** puis crée les
+  **demandes de reprise** correspondantes (une par ligne, visibles dans CMRO web)
+  et **imprime les étiquettes** générées sur l'imprimante Bluetooth (Zebra ZPL).
+  Nouveau champ `create_requests` sur `POST /driver/inventory` ; réponse enrichie
+  des demandes créées et de leurs étiquettes.
+- **#11 — Sécurisation du scan chauffeur.** Les endpoints
+  `pickup-labels/{code}/scan`, `.../scan-arrival` et `standalone-pickup/{code}`
+  acceptent un paramètre `pdv_code` et **refusent (409)** une étiquette
+  n'appartenant pas au PDV scanné (message explicite). L'app transmet le code du
+  PDV actif. Le double-scan reste neutralisé (anti-rebond 3 s + idempotence
+  serveur).
+- **#12 — Palette support obligatoire pour les balles.** La déclaration de balles
+  (`CARDBOARD`) exige désormais une palette support (ex. `PA 22020` — Pal Loc
+  80*120), contrôlée côté serveur (`_do_create_pickup_request`) et exposée dans
+  les formulaires web et mobile ; l'inventaire PDV l'affecte automatiquement aux
+  lignes balles.
+- **#9 — Bouton « Enregistrer » remonté.** Marge basse augmentée sur les écrans
+  d'inventaire (PDV + base) pour que le bouton ne soit plus masqué par la barre
+  système du téléphone.
+
+### Ticket #13 — App PDV : mises à jour + sécurité
+- **Auto-update stabilisé.** `expo-updates` (OTA) était compilé mais inutilisé et
+  entrait en conflit avec l'updater APK → l'app repartait sur le bundle embarqué
+  (« retour à la v1.9.0 à la réouverture »). `expo-updates` désactivé
+  (`app.json` → `updates.enabled: false`) : l'app exécute toujours son bundle
+  embarqué, de façon déterministe. Runbook de release ajouté
+  (`docs/operations/RUNBOOK_MISE_A_JOUR_MOBILE.md`) : versionCode + keystore
+  uniques, synchro de la version côté backend.
+- **Intégrité des mises à jour (sécurité).** `GET /app/version` expose désormais
+  l'empreinte **SHA-256** de l'APK servi ; l'app vérifie le fichier téléchargé
+  **avant** de lancer l'installeur et **refuse** l'installation en cas d'écart
+  (hachage par blocs, mémoire bornée). Cleartext coupé
+  (`usesCleartextTraffic: false`) → APK et API en **HTTPS** uniquement.
+- **Enregistrement d'appareil durci (sécurité).** Un `registration_code` est lié à
+  **un seul appareil physique** : `POST /devices/register` **refuse (409)** de
+  ré-enregistrer un autre appareil au lieu d'écraser silencieusement l'identité
+  (ce qui permettait à n'importe quel téléphone possédant le code de se faire passer
+  pour la tablette d'un PDV). Le re-binding exige une réinitialisation admin
+  (`reset-identity`) ; tentatives et liaisons tracées à l'audit.
+
 ### Security
 - **Isolation multi-tenant — correctif critique du filtre central.** Le filtre
   `do_orm_execute` utilisait `with_loader_criteria(..., lambda cls, tid=tenant_id: …)`.

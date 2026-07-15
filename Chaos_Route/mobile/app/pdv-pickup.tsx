@@ -86,6 +86,7 @@ export default function PdvPickupScreen() {
 
   const [pickupType, setPickupType] = useState<PickupType | ''>('')
   const [supportTypeId, setSupportTypeId] = useState<number | null>(null)
+  const [palletSupportTypeId, setPalletSupportTypeId] = useState<number | null>(null)
   const [quantity, setQuantity] = useState('1')
   const [availabilityDate, setAvailabilityDate] = useState(tomorrowIso())
   const [withContent, setWithContent] = useState(false)
@@ -130,10 +131,14 @@ export default function PdvPickupScreen() {
   const isCombi = !!selectedSupport?.is_combi
   const needsSupport = pickupType !== '' && pickupType !== 'MERCHANDISE'
   const showWithContent = pickupType === 'CONSIGNMENT' && !!selectedSupport?.content_item_label
+  // Ticket #12 : palette support obligatoire pour les balles / Pallet mandatory for bales
+  const showPalletSelect = pickupType === 'CARDBOARD'
+  const palletTypes = useMemo(() => supportTypes.filter((st) => st.code.startsWith('PA')), [supportTypes])
 
   const reset = useCallback(() => {
     setPickupType('')
     setSupportTypeId(null)
+    setPalletSupportTypeId(null)
     setQuantity('1')
     setWithContent(false)
     setNotes('')
@@ -152,6 +157,10 @@ export default function PdvPickupScreen() {
     }
     if (needsSupport && !supportTypeId) {
       Alert.alert('Manque info', 'Choisissez un type de support')
+      return
+    }
+    if (showPalletSelect && !palletSupportTypeId) {
+      Alert.alert('Manque info', 'Palette support obligatoire pour les balles (ex : PA 22020 — Pal Loc 80*120)')
       return
     }
     if (!qty || qty < 1) {
@@ -181,6 +190,7 @@ export default function PdvPickupScreen() {
         availability_date: availabilityDate,
         pickup_type: pickupType,
         with_content: showWithContent ? withContent : false,
+        pallet_support_type_id: showPalletSelect ? palletSupportTypeId : null,
         notes: notes || null,
       })
       const requestId = createRes.data.id
@@ -266,6 +276,7 @@ export default function PdvPickupScreen() {
   }, [
     pdvId, deviceMode, pickupType, supportTypeId, quantity, availabilityDate,
     withContent, showWithContent, notes, printer, needsSupport, reset, router,
+    showPalletSelect, palletSupportTypeId,
   ])
 
   if (loadingForm) {
@@ -382,6 +393,34 @@ export default function PdvPickupScreen() {
             redeclarez le nouveau total. Le chauffeur reprendra ce qu&apos;il peut.
           </Text>
         </View>
+      )}
+
+      {/* Palette support obligatoire pour les balles (ticket #12) / Mandatory pallet for bales */}
+      {showPalletSelect && (
+        <>
+          <Text style={styles.label}>Palette support *</Text>
+          {palletTypes.length === 0 ? (
+            <Text style={styles.emptyHint}>Aucune palette disponible.</Text>
+          ) : (
+            <View style={styles.supportList}>
+              {palletTypes.map((pt) => (
+                <TouchableOpacity
+                  key={pt.id}
+                  onPress={() => setPalletSupportTypeId(pt.id)}
+                  style={[
+                    styles.supportRow,
+                    palletSupportTypeId === pt.id && styles.supportRowActive,
+                  ]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.supportCode}>{pt.code}</Text>
+                    <Text style={styles.supportName}>{pt.name}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </>
       )}
 
       {/* Quantite / Quantity */}

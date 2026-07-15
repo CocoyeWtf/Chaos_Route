@@ -6,7 +6,7 @@ Auth par appareil (X-Device-ID header) — pas de JWT pour le chauffeur.
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -59,6 +59,7 @@ from app.schemas.combi_scan import (
     PickupLabelArrivalRead, CombiPickupCloseRead,
 )
 from app.schemas.inventory import InventorySubmit
+from app.utils.support_rules import is_return_support_code, pickup_type_for_support_code
 from app.api.deps import get_authenticated_device, require_device_tour_access
 from app.api.ws_tracking import manager
 
@@ -1130,9 +1131,27 @@ async def list_tour_pickups(
 _PICKUP_LABEL_CODE_RE = re.compile(r"^RET-[A-Za-z0-9]+-[A-Za-z0-9]+-\d{8}-\d{3}$")
 
 
+def _pdv_codes_match(scanned: str | None, actual: str) -> bool:
+    """Comparaison tolérante entre le code PDV scanné et le code réel du PDV de l'étiquette.
+
+    Ticket #11 : empêche le chauffeur de scanner l'étiquette d'un autre PDV après avoir
+    scanné le QR d'un premier PDV. `scanned` None/absent = pas de contrôle (rétro-compat).
+    Tolère le zero-padding (ex: "2805" ≡ "02805").
+    """
+    if not scanned:
+        return True
+    s = scanned.strip().upper()
+    a = (actual or "").strip().upper()
+    if s == a:
+        return True
+    s_stripped, a_stripped = s.lstrip("0"), a.lstrip("0")
+    return bool(s_stripped) and s_stripped == a_stripped
+
+
 @router.post("/pickup-labels/{label_code}/scan-arrival", response_model=PickupLabelArrivalRead)
 async def scan_pickup_label_arrival(
     label_code: str,
+    pdv_code: str | None = Query(None, description="Code PDV scanné (contrôle d'appartenance, ticket #11)"),
     db: AsyncSession = Depends(get_db),
     device: MobileDevice = Depends(get_authenticated_device),
 ):
@@ -1169,6 +1188,14 @@ async def scan_pickup_label_arrival(
         raise HTTPException(
             status_code=400,
             detail="Cette etiquette n'est pas une etiquette de declaration combi",
+        )
+
+    # Ticket #11 : l'étiquette doit appartenir au PDV scanné / Label must belong to scanned PDV
+    if pickup_req.pdv and not _pdv_codes_match(pdv_code, pickup_req.pdv.code):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cette etiquette appartient au PDV {pickup_req.pdv.code} — {pickup_req.pdv.name}, "
+                   f"pas au PDV scanne ({pdv_code}). Scannez le bon PDV.",
         )
 
     if label.status == LabelStatus.CANCELLED:
@@ -1232,6 +1259,7 @@ async def scan_pickup_label_arrival(
 async def scan_pickup_label(
     label_code: str,
     stop_id: int | None = Query(None),
+    pdv_code: str | None = Query(None, description="Code PDV scanné (contrôle d'appartenance, ticket #11)"),
     db: AsyncSession = Depends(get_db),
     device: MobileDevice = Depends(get_authenticated_device),
 ):
@@ -1245,11 +1273,20 @@ async def scan_pickup_label(
         .options(
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.labels),
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.support_type),
+            selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.pdv),
         )
     )
     label = result.scalar_one_or_none()
     if not label:
         raise HTTPException(status_code=404, detail="Label not found")
+
+    # Ticket #11 : l'étiquette doit appartenir au PDV scanné / Label must belong to scanned PDV
+    if label.pickup_request and label.pickup_request.pdv and not _pdv_codes_match(pdv_code, label.pickup_request.pdv.code):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cette etiquette appartient au PDV {label.pickup_request.pdv.code} — "
+                   f"{label.pickup_request.pdv.name}, pas au PDV scanne ({pdv_code}). Scannez le bon PDV.",
+        )
 
     # Bloquer le scan PICKED_UP direct sur etiquette combi /
     # Block direct PICKED_UP scan on combi label
@@ -1419,6 +1456,7 @@ async def refuse_pickup(
 @router.post("/standalone-pickup/{label_code}", response_model=PickupLabelRead)
 async def standalone_pickup_scan(
     label_code: str,
+    pdv_code: str | None = Query(None, description="Code PDV scanné (contrôle d'appartenance, ticket #11)"),
     db: AsyncSession = Depends(get_db),
     device: MobileDevice = Depends(get_authenticated_device),
 ):
@@ -1432,11 +1470,20 @@ async def standalone_pickup_scan(
         .options(
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.labels),
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.support_type),
+            selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.pdv),
         )
     )
     label = result.scalar_one_or_none()
     if not label:
         raise HTTPException(status_code=404, detail="Label not found")
+
+    # Ticket #11 : l'étiquette doit appartenir au PDV scanné / Label must belong to scanned PDV
+    if label.pickup_request and label.pickup_request.pdv and not _pdv_codes_match(pdv_code, label.pickup_request.pdv.code):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cette etiquette appartient au PDV {label.pickup_request.pdv.code} — "
+                   f"{label.pickup_request.pdv.name}, pas au PDV scanne ({pdv_code}). Scannez le bon PDV.",
+        )
 
     if label.status == LabelStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="Etiquette annulee — la demande a ete modifiee. Detruisez cette etiquette.")
@@ -1686,12 +1733,18 @@ async def inventory_lookup(
     st_result = await db.execute(
         select(SupportType).where(SupportType.is_active == True).order_by(SupportType.code)
     )
-    support_types = st_result.scalars().all()
+    # Restreindre aux supports de retour autorisés (ticket #8) : CO/PA/PL/RE + SF 40040/40104/40204.
+    # Exclut notamment les casiers à bière (SF 3xxxx) qui relèvent du flux consignes dédié.
+    support_types = [st for st in st_result.scalars().all() if is_return_support_code(st.code)]
 
     return {
         "pdv": {"id": pdv.id, "code": pdv.code, "name": pdv.name},
         "support_types": [
-            {"id": st.id, "code": st.code, "name": st.name, "unit_quantity": st.unit_quantity, "unit_label": st.unit_label}
+            {
+                "id": st.id, "code": st.code, "name": st.name,
+                "unit_quantity": st.unit_quantity, "unit_label": st.unit_label,
+                "is_combi": st.is_combi,
+            }
             for st in support_types
         ],
     }
@@ -1703,13 +1756,37 @@ async def submit_inventory(
     db: AsyncSession = Depends(get_db),
     device: MobileDevice = Depends(get_authenticated_device),
 ):
-    """Soumettre un inventaire PDV depuis la tablette / Submit PDV inventory from tablet."""
+    """Soumettre un inventaire PDV depuis la tablette / Submit PDV inventory from tablet.
+
+    Ticket #8 : refuse les supports hors périmètre retour (seuls CO/PA/PL/RE + SF 40040/40104/40204).
+    Ticket #10 : si `create_requests`, crée en plus une demande de reprise CMRO par ligne
+    (quantité > 0) et renvoie les étiquettes générées pour impression (#7).
+    """
     _check_device_feature(device, "inventory")
     from app.models.pdv_inventory import PdvInventory, PdvStock
 
     pdv = await db.get(PDV, data.pdv_id)
     if not pdv:
         raise HTTPException(status_code=404, detail="PDV not found")
+
+    # Valider que tous les supports encodés sont autorisés (ticket #8) /
+    # Validate every encoded support is allowed for returns (ticket #8)
+    st_ids = {line.support_type_id for line in data.lines}
+    st_map: dict[int, SupportType] = {}
+    if st_ids:
+        st_rows = (await db.execute(
+            select(SupportType).where(SupportType.id.in_(st_ids))
+        )).scalars().all()
+        st_map = {st.id: st for st in st_rows}
+    for line in data.lines:
+        st = st_map.get(line.support_type_id)
+        if st is None:
+            raise HTTPException(status_code=404, detail=f"Type de support {line.support_type_id} introuvable")
+        if not is_return_support_code(st.code):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Support non autorisé à l'encodage de retours : {st.name}",
+            )
 
     now = _now_iso()
     driver_name = data.inventoried_by or ""
@@ -1760,7 +1837,67 @@ async def submit_inventory(
 
     await db.flush()
 
-    return {"status": "ok", "pdv_id": data.pdv_id, "lines": len(data.lines)}
+    # Ticket #10 : créer les demandes de reprise CMRO à la validation /
+    # Create CMRO pickup requests on validation
+    created_requests: list[dict] = []
+    if data.create_requests:
+        if not device.pdv_id:
+            raise HTTPException(status_code=403, detail="Appareil non rattaché à un PDV")
+        if device.pdv_id != data.pdv_id:
+            raise HTTPException(status_code=403, detail="Le PDV inventorié ne correspond pas à la tablette")
+
+        from app.api.pickup_requests import _do_create_pickup_request
+        from app.schemas.pickup import PickupRequestCreate
+
+        # Palette support par défaut pour les balles (ticket #12 : Pal Loc 80*120 PA 22020) /
+        # Default pallet support for bales
+        balle_pallet = (await db.execute(
+            select(SupportType).where(SupportType.code.in_(["PA 22020", "PA22020"]))
+        )).scalars().first()
+
+        avail_date = data.availability_date or (
+            (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        )
+        for line in data.lines:
+            if line.quantity <= 0:
+                continue
+            st = st_map[line.support_type_id]
+            pickup_type = pickup_type_for_support_code(st.code)
+            pallet_id = balle_pallet.id if (pickup_type == "CARDBOARD" and balle_pallet) else None
+            req = await _do_create_pickup_request(
+                db,
+                PickupRequestCreate(
+                    pdv_id=data.pdv_id,
+                    support_type_id=line.support_type_id,
+                    quantity=line.quantity,
+                    availability_date=avail_date,
+                    pickup_type=pickup_type,
+                    pallet_support_type_id=pallet_id,
+                    notes=f"Créé depuis l'inventaire PDV ({driver_name})" if driver_name else "Créé depuis l'inventaire PDV",
+                ),
+                device_id=device.id,
+            )
+            created_requests.append({
+                "id": req.id,
+                "support_type_id": req.support_type_id,
+                "support_type_name": st.name,
+                "quantity": req.quantity,
+                "pickup_type": req.pickup_type.value if hasattr(req.pickup_type, "value") else req.pickup_type,
+                "labels": [
+                    {"label_id": lb.id, "label_code": lb.label_code, "sequence_number": lb.sequence_number}
+                    for lb in sorted(req.labels or [], key=lambda x: x.sequence_number)
+                ],
+            })
+
+    return {
+        "status": "ok",
+        "pdv_id": data.pdv_id,
+        "pdv_code": pdv.code,
+        "pdv_name": pdv.name,
+        "lines": len(data.lines),
+        "requests_created": len(created_requests),
+        "requests": created_requests,
+    }
 
 
 # ─── Inventaire base mobile / Mobile base inventory ───

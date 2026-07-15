@@ -197,7 +197,8 @@ export interface SupportTypeBasic {
   name: string
   unit_quantity: number
   unit_label?: string
-  is_active: boolean
+  is_active?: boolean
+  is_combi?: boolean
 }
 
 export interface InventoryLine {

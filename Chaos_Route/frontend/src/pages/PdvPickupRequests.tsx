@@ -235,6 +235,11 @@ export default function PdvPickupRequests() {
       const finalPdvId = isPdvUser ? user!.pdv_id : Number(pdvId)
       if (!finalPdvId || !pickupType) return
       if (needsSupportType && !supportTypeId) return
+      // Ticket #12 : palette support obligatoire pour les balles / Pallet mandatory for bales
+      if (showPalletSelect && !palletSupportTypeId) {
+        alert('Palette support obligatoire pour les balles (ex : PA 22020 — Pal Loc 80*120)')
+        return
+      }
 
       setSubmitting(true)
       try {
@@ -702,15 +707,20 @@ export default function PdvPickupRequests() {
         {showPalletSelect && (
           <div>
             <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-              Palette support
+              Palette support *
             </label>
             <select
               value={palletSupportTypeId}
               onChange={(e) => setPalletSupportTypeId(e.target.value)}
+              required
               className="w-full px-3 py-2 rounded-lg border text-sm"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                borderColor: !palletSupportTypeId ? '#ef4444' : 'var(--border-color)',
+                color: 'var(--text-primary)',
+              }}
             >
-              <option value="">-- Aucune --</option>
+              <option value="">-- Selectionner --</option>
               {palletTypes.map((pt) => (
                 <option key={pt.id} value={pt.id}>
                   {pt.code} - {pt.name}

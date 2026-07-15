@@ -65,6 +65,7 @@ export default function BaseInventoryScreen() {
   const [selectedZoneId, setSelectedZoneId] = useState<number | null>(null)
   const [inventoryType, setInventoryType] = useState<InventoryType | null>(null)
   const [quantities, setQuantities] = useState<QuantityMap>({})
+  const [search, setSearch] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
 
@@ -84,11 +85,14 @@ export default function BaseInventoryScreen() {
     })()
   }, [])
 
-  /* Types de support filtres selon le type d'inventaire / Filter support types by inventory type */
-  const filteredSupportTypes = setup?.support_types.filter((st) => {
-    if (inventoryType === 'BEER_DAILY') return st.code.startsWith('SF-')
-    return true  // ALL_WEEKLY et COMPLEMENT : tous les types
-  }) || []
+  /* Types de support filtres selon le type d'inventaire + recherche par nom (ticket #8) /
+     Filter support types by inventory type + name search */
+  const filteredSupportTypes = (setup?.support_types.filter((st) => {
+    if (inventoryType === 'BEER_DAILY' && !st.code.startsWith('SF-')) return false
+    const q = search.trim().toLowerCase()
+    if (q && !st.name.toLowerCase().includes(q)) return false
+    return true
+  }) || [])
 
   /* Initialiser les quantites quand le type change / Init quantities on type change */
   const selectInventoryType = useCallback((type: InventoryType) => {
@@ -270,6 +274,16 @@ export default function BaseInventoryScreen() {
                     Saisissez le nombre de palettes par type
                   </Text>
 
+                  {/* Recherche support par nom (ticket #8) / Support search by name */}
+                  <TextInput
+                    style={styles.searchInput}
+                    value={search}
+                    onChangeText={setSearch}
+                    placeholder="Rechercher un support..."
+                    placeholderTextColor={COLORS.textMuted}
+                    autoCorrect={false}
+                  />
+
                   {filteredSupportTypes.map((st) => (
                     <View key={st.id} style={styles.supportRow}>
                       <View style={styles.supportInfo}>
@@ -353,7 +367,14 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: COLORS.border,
   },
   backBtnText: { fontSize: 13, fontWeight: '600', color: COLORS.textSecondary },
-  content: { padding: 16, paddingBottom: 40 },
+  // Ticket #9 : marge basse plus importante pour ne pas masquer le bouton sous la
+  // barre systeme / larger bottom padding so the button clears the system nav bar.
+  content: { padding: 16, paddingBottom: 140 },
+  searchInput: {
+    backgroundColor: COLORS.bgSecondary, borderWidth: 1, borderColor: COLORS.border,
+    borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
+    color: COLORS.textPrimary, fontSize: 15, marginBottom: 12,
+  },
 
   /* Base card */
   baseCard: {

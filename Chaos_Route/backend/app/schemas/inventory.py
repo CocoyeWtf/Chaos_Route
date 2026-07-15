@@ -14,6 +14,12 @@ class InventorySubmit(BaseModel):
     pdv_id: int
     lines: list[InventoryLineCreate]
     inventoried_by: str | None = None
+    # Ticket #10 : à la validation, créer aussi les demandes de reprise CMRO /
+    # On validation, also create CMRO pickup requests (one per line with quantity > 0)
+    create_requests: bool = False
+    # Date de disponibilité pour les demandes créées (défaut : demain) /
+    # Availability date for created requests (default: tomorrow) — format YYYY-MM-DD
+    availability_date: str | None = None
 
 
 class PdvStockRead(BaseModel):

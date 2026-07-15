@@ -237,7 +237,8 @@ export default function CombiScanScreen() {
       let isCombiDeclaration = false
       try {
         const { data: arrival } = await api.post(
-          `/driver/pickup-labels/${encodeURIComponent(data)}/scan-arrival`,
+          `/driver/pickup-labels/${encodeURIComponent(data)}/scan-arrival`
+            + `?pdv_code=${encodeURIComponent(activePdv!.code)}`,
         )
         isCombiDeclaration = true
         setActiveCombi({
@@ -282,7 +283,10 @@ export default function CombiScanScreen() {
       if (!isCombiDeclaration) {
         // Fallback : etiquette reprise classique / Fallback: standard pickup label
         try {
-          const { data: scan } = await api.post(`/driver/standalone-pickup/${encodeURIComponent(data)}`)
+          const { data: scan } = await api.post(
+            `/driver/standalone-pickup/${encodeURIComponent(data)}`
+              + `?pdv_code=${encodeURIComponent(activePdv!.code)}`,
+          )
           setScans((prev) => {
             if (prev.find((s) => s.barcode === data && s.type === 'LABEL')) return prev
             return [{

@@ -669,6 +669,19 @@ async def _do_create_pickup_request(
     elif data.pickup_type != "MERCHANDISE":
         raise HTTPException(status_code=400, detail="Type de support requis pour ce type de reprise")
 
+    # Ticket #12 : palette support obligatoire pour les balles (CARDBOARD) /
+    # Pallet support mandatory for cardboard/plastic bales
+    if str(data.pickup_type) == "CARDBOARD" and data.pallet_support_type_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Palette support obligatoire pour les balles (ex: PA 22020 — Pal Loc 80*120)",
+        )
+    # Valider la palette support si fournie / Validate pallet support when provided
+    if data.pallet_support_type_id is not None:
+        pallet_st = await db.get(SupportType, data.pallet_support_type_id)
+        if not pallet_st:
+            raise HTTPException(status_code=404, detail="Palette support introuvable")
+
     st_code = st.code if st else "MERCH"
     is_combi = bool(st and st.is_combi)
 

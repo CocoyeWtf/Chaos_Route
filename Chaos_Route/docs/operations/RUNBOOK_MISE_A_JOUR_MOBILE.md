@@ -19,6 +19,13 @@ La distribution se fait **par APK** (page `/app/setup/<code>` + updater intégr�
   (Si un jour on veut de l'OTA, ce sera une décision séparée : réactiver expo-updates,
   fixer `runtimeVersion` sur une chaîne stable — pas `appVersion` — et publier via
   `eas update --channel production`. Ne PAS mélanger les deux.)
+- **Mise à jour non refusable.** Quand `FORCE_UPDATE = True` et qu'un build supérieur
+  est servi, l'app **démarre automatiquement** le téléchargement + l'installation dès la
+  détection (modale bloquante, sans oui/non). L'équipier est notifié mais ne peut pas
+  refuser (une MAJ poussée est obligatoire — évite les écarts de process). Seule reste
+  l'**invite système Android** d'installation (non contournable sans MDM). En cas
+  d'échec, la modale propose « Réessayer » et l'app reste inutilisable tant que la MAJ
+  n'est pas faite.
 
 ## 2. Source de vérité unique pour la version
 

@@ -47,6 +47,10 @@ export default function RootLayout() {
   const [downloadUrl, setDownloadUrl] = useState('')
   const [updateSha256, setUpdateSha256] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
+  const [updateError, setUpdateError] = useState('')
+  // Garde : ne declenche l'installation automatique qu'une fois par detection /
+  // Guard: auto-trigger install only once per detection
+  const autoStartedRef = useRef(false)
 
   // Kiosk mode state
   const [kioskExitAllowed, setKioskExitAllowed] = useState(false)
@@ -124,18 +128,36 @@ export default function RootLayout() {
     }
   }, [isRegistered, isLoading, segments, router, authUser, devicePdvId])
 
-  const handleUpdate = async () => {
+  const handleUpdate = useCallback(async () => {
+    if (!downloadUrl) return
     setDownloading(true)
+    setUpdateError('')
     try {
       await downloadAndInstallApk(downloadUrl, updateSha256)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       console.error('Update failed:', msg)
-      Alert.alert('Erreur de mise a jour', msg)
+      // Pas d'Alert (pas de choix oui/non) : l'erreur s'affiche dans la modale
+      // bloquante avec un bouton Reessayer. / No yes/no alert: error shown in the
+      // blocking modal with a retry button.
+      setUpdateError(msg)
     } finally {
       setDownloading(false)
     }
-  }
+  }, [downloadUrl, updateSha256])
+
+  // Mise a jour NON refusable : des qu'une MAJ est detectee, on lance
+  // automatiquement le telechargement + l'installation, sans demander l'accord de
+  // l'equipier (une MAJ poussee est obligatoire ; eviter les ecarts de process si
+  // quelqu'un refuse). L'equipier est notifie via la modale bloquante. /
+  // Non-declinable update: auto-start download+install as soon as an update is
+  // detected, without asking the crew member (a pushed update is mandatory).
+  useEffect(() => {
+    if (updateAvailable && downloadUrl && !autoStartedRef.current) {
+      autoStartedRef.current = true
+      handleUpdate()
+    }
+  }, [updateAvailable, downloadUrl, handleUpdate])
 
   // Triple-tap pour ouvrir la modale kiosque / Triple-tap to open kiosk modal
   const handleKioskTap = useCallback(() => {
@@ -189,19 +211,26 @@ export default function RootLayout() {
         <View style={updateStyles.overlay}>
           <View style={updateStyles.card}>
             <Text style={updateStyles.title}>Mise a jour obligatoire</Text>
-            <Text style={updateStyles.version}>Version {updateVersion} disponible</Text>
+            <Text style={updateStyles.version}>Version {updateVersion}</Text>
             <Text style={updateStyles.desc}>
-              Une nouvelle version de CMRO Driver est disponible. Vous devez mettre a jour pour continuer.
+              Une nouvelle version est installee automatiquement. Validez l'invite
+              d'installation d'Android. L'application ne peut pas etre utilisee tant
+              que la mise a jour n'est pas terminee.
             </Text>
             {downloading ? (
               <View style={updateStyles.progressRow}>
                 <ActivityIndicator size="small" color={COLORS.primary} />
-                <Text style={updateStyles.progressText}>Telechargement en cours...</Text>
+                <Text style={updateStyles.progressText}>Installation en cours...</Text>
               </View>
             ) : (
-              <TouchableOpacity onPress={handleUpdate} style={updateStyles.btn}>
-                <Text style={updateStyles.btnText}>Mettre a jour</Text>
-              </TouchableOpacity>
+              <>
+                {updateError ? (
+                  <Text style={updateStyles.errorText}>{updateError}</Text>
+                ) : null}
+                <TouchableOpacity onPress={handleUpdate} style={updateStyles.btn}>
+                  <Text style={updateStyles.btnText}>Reessayer</Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
         </View>
@@ -380,6 +409,12 @@ const updateStyles = StyleSheet.create({
   progressText: {
     color: COLORS.textSecondary,
     fontSize: 13,
+  },
+  errorText: {
+    color: COLORS.danger,
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 12,
   },
 })
 

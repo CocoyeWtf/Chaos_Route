@@ -42,12 +42,19 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # SMTP (reset mot de passe / password reset)
+    # Deux modes TLS mutuellement exclusifs / Two mutually exclusive TLS modes :
+    #  - SMTP_USE_TLS=True  → TLS implicite dès la connexion (port 465).
+    #  - SMTP_STARTTLS=True → connexion en clair puis STARTTLS (port 587, submission).
+    # Le port 587 exige STARTTLS, PAS le TLS implicite : c'est le défaut correct.
+    # (Implicit TLS on 587 fails the handshake — the historical bug.)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "noreply@chaosmanager.tech"
-    SMTP_USE_TLS: bool = True
+    SMTP_USE_TLS: bool = False
+    SMTP_STARTTLS: bool = True
+    SMTP_TIMEOUT: int = 15
 
     # Rate Limiting
     RATE_LIMIT_LOGIN: str = "5/minute"

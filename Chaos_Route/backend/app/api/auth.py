@@ -26,6 +26,7 @@ from app.utils.auth import (
     create_mfa_token, decode_token, verify_password, hash_password,
 )
 from app.api.deps import get_current_user
+from app.services.email import EmailError, send_email, smtp_configured
 from app.services.token_revocation import is_revoked, revoke_token
 from app.utils.password_policy import PasswordPolicyError, validate_password_strength
 
@@ -393,41 +394,39 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, db: Asy
     token = create_reset_token(user.id)
     reset_url = f"{settings.PUBLIC_URL}/reset-password?token={token}"
 
-    # Envoi email / Send email
-    if settings.SMTP_HOST:
-        import aiosmtplib
-        from email.message import EmailMessage
+    import logging
+    log = logging.getLogger(__name__)
 
-        msg = EmailMessage()
-        msg["From"] = settings.SMTP_FROM
-        msg["To"] = user.email
-        msg["Subject"] = "Chaos RouteManager — Réinitialisation de mot de passe"
-        msg.set_content(
-            f"Bonjour {user.username},\n\n"
-            f"Vous avez demandé la réinitialisation de votre mot de passe.\n"
-            f"Cliquez sur le lien ci-dessous (valable 15 minutes) :\n\n"
-            f"{reset_url}\n\n"
-            f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.\n\n"
-            f"— Chaos RouteManager"
-        )
-
-        try:
-            await aiosmtplib.send(
-                msg,
-                hostname=settings.SMTP_HOST,
-                port=settings.SMTP_PORT,
-                username=settings.SMTP_USER or None,
-                password=settings.SMTP_PASSWORD or None,
-                use_tls=settings.SMTP_USE_TLS,
-            )
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Erreur envoi email reset: {e}")
-            raise HTTPException(status_code=500, detail="Erreur lors de l'envoi de l'email")
-    else:
+    if not smtp_configured():
         # Pas de SMTP configuré — log le lien pour debug / No SMTP — log link for debug
-        import logging
-        logging.getLogger(__name__).warning(f"SMTP non configuré. Lien reset: {reset_url}")
+        log.warning("SMTP non configuré. Lien reset: %s", reset_url)
+    else:
+        # Un échec d'envoi ne doit NI planter en 500 NI révéler que l'email
+        # existe (anti-énumération) : on journalise à ERROR pour l'exploitation
+        # et on renvoie la même réponse générique. / A send failure must neither
+        # 500 nor reveal that the email exists: log at ERROR, return generic.
+        try:
+            await send_email(
+                to=user.email,
+                subject="Chaos RouteManager — Réinitialisation de mot de passe",
+                body=(
+                    f"Bonjour {user.username},\n\n"
+                    f"Vous avez demandé la réinitialisation de votre mot de passe.\n"
+                    f"Cliquez sur le lien ci-dessous (valable 15 minutes) :\n\n"
+                    f"{reset_url}\n\n"
+                    f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.\n\n"
+                    f"— Chaos RouteManager"
+                ),
+            )
+        except EmailError as e:
+            log.error("Échec envoi email reset (user_id=%s): %s", user.id, e)
+            db.add(AuditLog(
+                entity_type="auth", entity_id=user.id, action="RESET_SEND_FAILED",
+                changes=f'{{"ip":"{ip}"}}',
+                user=user.username, timestamp=now,
+            ))
+            await db.commit()
+            return {"detail": "Si cette adresse existe, un email a été envoyé"}
 
     db.add(AuditLog(
         entity_type="auth", entity_id=user.id, action="RESET_REQUESTED",

@@ -196,6 +196,21 @@ export default function PdvPickupRequests() {
   const [pdvDropdownOpen, setPdvDropdownOpen] = useState(false)
   const pdvSearchRef = useRef<HTMLDivElement>(null)
 
+  // Recherche support (ticket #15 : rechercher par nom, afficher le libellé seul) /
+  // Support search (search by name, show label only)
+  const [stSearch, setStSearch] = useState('')
+  const [stDropdownOpen, setStDropdownOpen] = useState(false)
+  const stSearchRef = useRef<HTMLDivElement>(null)
+
+  /* Support types filtrés par type de reprise ET par la recherche texte (nom ou code) */
+  const searchedSupportTypes = useMemo(() => {
+    const q = stSearch.trim().toLowerCase()
+    if (!q) return filteredSupportTypes
+    return filteredSupportTypes.filter(
+      (st) => st.name.toLowerCase().includes(q) || st.code.toLowerCase().includes(q),
+    )
+  }, [filteredSupportTypes, stSearch])
+
   const selectedPdv = pdvs.find((p) => String(p.id) === pdvId)
 
   const filteredPdvs = useMemo(() => {
@@ -211,6 +226,9 @@ export default function PdvPickupRequests() {
     const handler = (e: MouseEvent) => {
       if (pdvSearchRef.current && !pdvSearchRef.current.contains(e.target as Node)) {
         setPdvDropdownOpen(false)
+      }
+      if (stSearchRef.current && !stSearchRef.current.contains(e.target as Node)) {
+        setStDropdownOpen(false)
       }
     }
     document.addEventListener('mousedown', handler)
@@ -599,27 +617,57 @@ export default function PdvPickupRequests() {
             >
               Type de support *
             </label>
-            <select
-              value={supportTypeId}
-              onChange={(e) => {
-                setSupportTypeId(e.target.value)
-                setWithContent(false)
-              }}
-              required
-              className="w-full px-3 py-2 rounded-lg border text-sm"
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                borderColor: 'var(--border-color)',
-                color: 'var(--text-primary)',
-              }}
-            >
-              <option value="">-- Selectionner --</option>
-              {filteredSupportTypes.map((st) => (
-                <option key={st.id} value={st.id}>
-                  {st.code} - {st.name} {!isPdvUser && st.unit_value != null ? `(${st.unit_value} €)` : ''}
-                </option>
-              ))}
-            </select>
+            {/* Ticket #15 : combobox recherchable (tape le nom du support), et on
+                n'affiche QUE le libellé (pas le code). Les supports proposés sont
+                déjà restreints aux retours autorisés côté backend. */}
+            <div className="relative" ref={stSearchRef}>
+              <input
+                type="text"
+                value={stDropdownOpen ? stSearch : (selectedSt?.name ?? '')}
+                onChange={(e) => { setStSearch(e.target.value); setStDropdownOpen(true) }}
+                onFocus={() => { setStSearch(''); setStDropdownOpen(true) }}
+                placeholder="Rechercher un support par nom…"
+                className="w-full px-3 py-2 rounded-lg border text-sm"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  borderColor: 'var(--border-color)',
+                  color: 'var(--text-primary)',
+                }}
+              />
+              {stDropdownOpen && (
+                <div
+                  className="absolute z-50 w-full mt-1 max-h-60 overflow-y-auto rounded-lg border shadow-lg"
+                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                >
+                  {searchedSupportTypes.length === 0 ? (
+                    <div className="px-3 py-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                      Aucun support trouve
+                    </div>
+                  ) : (
+                    searchedSupportTypes.map((st) => (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => {
+                          setSupportTypeId(String(st.id))
+                          setWithContent(false)
+                          setStSearch('')
+                          setStDropdownOpen(false)
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm hover:brightness-125 cursor-pointer"
+                        style={{
+                          backgroundColor: String(st.id) === supportTypeId ? 'var(--bg-tertiary)' : 'transparent',
+                          color: 'var(--text-primary)',
+                        }}
+                      >
+                        {st.name}
+                        {!isPdvUser && st.unit_value != null ? ` (${st.unit_value} €)` : ''}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           )}
 

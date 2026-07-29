@@ -75,6 +75,21 @@ def _check_device_feature(device: MobileDevice, feature: str) -> None:
         raise HTTPException(status_code=403, detail=f"Feature '{feature}' not allowed on this device")
 
 
+def _enforce_device_pdv_scope(device: MobileDevice, pdv: PDV) -> None:
+    """Empêcher une tablette verrouillée sur un PDV d'agir sur un AUTRE PDV (ticket #14).
+
+    Vecteur d'usurpation signalé : une tablette rattachée au PDV A pouvait accéder
+    au profil/données du PDV B en saisissant simplement son numéro (code). On refuse
+    donc dès qu'un appareil PORTE un pdv_id et que le PDV visé n'est pas le sien.
+
+    Les appareils chauffeur (pdv_id absent) ne sont PAS contraints : ils visitent
+    légitimement plusieurs PDV sur leur tournée. La garde ne mord donc que sur les
+    tablettes magasin, exactement comme le contrôle déjà en place à /driver/inventory.
+    / Lock a PDV-bound tablet to its own PDV; drivers (no pdv_id) are unaffected."""
+    if device.pdv_id and pdv is not None and device.pdv_id != pdv.id:
+        raise HTTPException(status_code=403, detail="Accès non autorisé à ce PDV depuis cette tablette")
+
+
 async def _check_base_support_allowed(
     device: MobileDevice,
     support_type_id: int | None,
@@ -1729,6 +1744,8 @@ async def inventory_lookup(
     pdv = result.scalar_one_or_none()
     if not pdv:
         raise HTTPException(status_code=404, detail="PDV non trouvé")
+    # Ticket #14 : une tablette magasin ne peut interroger que SON PDV.
+    _enforce_device_pdv_scope(device, pdv)
 
     st_result = await db.execute(
         select(SupportType).where(SupportType.is_active == True).order_by(SupportType.code)
@@ -2074,6 +2091,9 @@ async def scan_combi_at_pdv(
         pdv = result.scalar_one_or_none()
     if not pdv:
         raise HTTPException(status_code=404, detail=f"PDV inconnu: {pdv_code}")
+    # Ticket #14 : une tablette rattachée à un PDV ne scanne que pour son PDV
+    # (les chauffeurs, sans pdv_id, restent libres de scanner sur toute leur tournée).
+    _enforce_device_pdv_scope(device, pdv)
 
     # Validation pickup_label_id obligatoire / pickup_label_id is required
     if data.pickup_label_id is None:
@@ -2435,6 +2455,9 @@ async def validate_pdv_code(
         pdv = result.scalar_one_or_none()
     if not pdv:
         raise HTTPException(status_code=404, detail=f"PDV inconnu: {pdv_code}")
+    # Ticket #14 : une tablette magasin ne valide que son propre code PDV
+    # (empêche l'énumération/usurpation d'un autre PDV par simple saisie du numéro).
+    _enforce_device_pdv_scope(device, pdv)
     return {"id": pdv.id, "code": pdv.code, "name": pdv.name, "city": pdv.city}
 
 

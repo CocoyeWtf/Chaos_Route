@@ -7,6 +7,7 @@ import { useAppStore } from '../../stores/useAppStore'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { useMapStore } from '../../stores/useMapStore'
 import { MfaDialog } from '../auth/MfaDialog'
+import { ReportButton } from '../support/ReportButton'
 import { useApi } from '../../hooks/useApi'
 import api from '../../services/api'
 import type { Country, Region, PDV, BaseLogistics } from '../../types'
@@ -245,6 +246,13 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-2.5">
+        {/* Bouton « Signaler » + enregistrement (ticket #16 : déplacé ici, à
+            gauche du sélecteur de langue, depuis l'ancien cluster flottant). */}
+        <ReportButton />
+
+        {/* Séparateur / Divider */}
+        <div className="h-5 w-px" style={{ backgroundColor: 'var(--border-color)' }} />
+
         {/* Sélecteur de langue segmenté / Segmented language selector */}
         <div
           className="flex h-8 items-center rounded-lg border overflow-hidden"

@@ -39,6 +39,25 @@ export function CreateTicketModal({ open, onClose, onCreated }: Props) {
   const previews = useMemo(() => files.map((f) => ({ name: f.name, url: URL.createObjectURL(f) })), [files])
   useEffect(() => () => { previews.forEach((p) => URL.revokeObjectURL(p.url)) }, [previews])
 
+  /* Ticket #19 : coller une capture d'écran (Ctrl+V) plutôt que de parcourir
+     l'explorateur. Écoute globale tant que la modale est ouverte. / Paste a
+     screenshot from the clipboard while the modal is open. */
+  useEffect(() => {
+    if (!open) return
+    const onPaste = (e: ClipboardEvent) => {
+      const imgs = Array.from(e.clipboardData?.items ?? [])
+        .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+        .map((it) => it.getAsFile())
+        .filter((f): f is File => !!f)
+      if (imgs.length) {
+        e.preventDefault()
+        setFiles((prev) => [...prev, ...imgs].slice(0, MAX_PHOTOS))
+      }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [open])
+
   const reset = () => { setTitle(''); setDescription(''); setType('BUG'); setPriority('MEDIUM'); setFiles([]) }
 
   const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,7 +146,7 @@ export function CreateTicketModal({ open, onClose, onCreated }: Props) {
           {/* Photos / captures d'écran (illustrer le problème) */}
           <div className="mb-3">
             <label className="text-xs block mb-1" style={{ color: 'var(--text-muted)' }}>
-              Photos / captures d'écran <span className="opacity-70">(max {MAX_PHOTOS}, 5 Mo)</span>
+              Photos / captures d'écran <span className="opacity-70">(max {MAX_PHOTOS}, 5 Mo — ou collez avec Ctrl+V)</span>
             </label>
             {previews.length > 0 && (
               <div className="grid grid-cols-4 gap-2 mb-2">

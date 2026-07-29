@@ -6,7 +6,6 @@ import { useTranslation } from 'react-i18next'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { ChunkErrorBoundary } from '../ErrorBoundary'
-import { ReportButton } from '../support/ReportButton'
 import { useAppStore } from '../../stores/useAppStore'
 import { recordRoute, installErrorCapture } from '../../services/supportContext'
 
@@ -45,8 +44,6 @@ export function MainLayout() {
           <Outlet />
           </Suspense>
           </ChunkErrorBoundary>
-          {/* Bouton « Signaler » présent sur toutes les pages / Global report button */}
-          {!isFullscreen && <ReportButton />}
           {/* Bouton flottant quitter plein écran / Floating exit fullscreen button */}
           {isFullscreen && (
             <button

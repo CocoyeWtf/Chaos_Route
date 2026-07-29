@@ -26,10 +26,28 @@ from app.models.ticket import Ticket, TicketComment, TicketPhoto, TicketStatus, 
 from app.models.user import User
 from app.schemas.ticket import (
     TicketCommentCreate, TicketCommentRead, TicketCreate, TicketDetail,
-    TicketListItem, TicketPhotoRead, TicketStatusUpdate,
+    TicketListItem, TicketPhotoRead, TicketStatusUpdate, TicketUpdate,
 )
 
 router = APIRouter()
+
+
+def _user_has_permission(user: User, resource: str, action: str) -> bool:
+    """L'utilisateur porte-t-il la permission resource:action ? (superadmin inclus).
+    Réplique la logique de deps.require_permission pour un contrôle inline « auteur
+    OU admin ». / Does the user hold resource:action? (superadmin bypasses)."""
+    if user.is_superadmin:
+        return True
+    for role in user.roles:
+        for perm in role.permissions:
+            if perm.resource == resource and perm.action == action:
+                return True
+    return False
+
+
+def _can_edit_ticket(user: User, ticket: Ticket) -> bool:
+    """Auteur du ticket OU administrateur (tickets:update) / Ticket author OR admin."""
+    return ticket.created_by_user_id == user.id or _user_has_permission(user, "tickets", "update")
 
 # Stockage des photos de tickets (capture/illustration) / Ticket photo storage
 TICKET_PHOTOS_DIR = Path("data/photos/tickets")
@@ -423,6 +441,87 @@ async def add_comment(
     await db.flush()
     await db.refresh(comment)
     return comment
+
+
+@router.put("/{ticket_id}", response_model=TicketDetail)
+async def update_ticket(
+    ticket_id: int,
+    data: TicketUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Modifier son propre ticket (titre, description, type, priorité).
+
+    Autorisé à l'AUTEUR du ticket ou à un admin (tickets:update). Le statut n'est
+    pas modifiable ici (réservé aux admins via /status). Chaque modification est
+    tracée comme événement système. / Edit own ticket; author or admin only."""
+    ticket = await db.get(Ticket, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not _can_edit_ticket(user, ticket):
+        raise HTTPException(status_code=403, detail="Seul l'auteur ou un administrateur peut modifier ce ticket")
+
+    changes: list[str] = []
+    if data.title is not None and data.title.strip() and data.title.strip() != ticket.title:
+        ticket.title = data.title.strip()
+        changes.append("titre")
+    if data.description is not None and (data.description or None) != ticket.description:
+        ticket.description = data.description or None
+        changes.append("description")
+    if data.ticket_type is not None and data.ticket_type != ticket.ticket_type:
+        changes.append(f"type : {ticket.ticket_type.value} → {data.ticket_type.value}")
+        ticket.ticket_type = data.ticket_type
+    if data.priority is not None and data.priority != ticket.priority:
+        changes.append(f"priorité : {ticket.priority.value} → {data.priority.value}")
+        ticket.priority = data.priority
+
+    if changes:
+        db.add(TicketComment(
+            ticket_id=ticket.id, user_id=user.id, user_name=_user_name(user),
+            body=f"{_user_name(user)} a modifié le ticket ({', '.join(changes)}).", is_system=True,
+        ))
+    await db.flush()
+    result = await db.execute(
+        select(Ticket).where(Ticket.id == ticket.id).options(
+            selectinload(Ticket.comments), selectinload(Ticket.photos)
+        )
+    )
+    return result.scalar_one()
+
+
+@router.delete("/{ticket_id}", status_code=204)
+async def delete_ticket(
+    ticket_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Supprimer son propre ticket / Delete own ticket.
+
+    Autorisé à l'AUTEUR du ticket ou à un admin (tickets:update). La suppression
+    entraîne en cascade celle des échanges et des photos (relation ORM). Les
+    fichiers image sur disque sont retirés au passage (best-effort)."""
+    ticket = await db.execute(
+        select(Ticket).where(Ticket.id == ticket_id).options(selectinload(Ticket.photos))
+    )
+    ticket = ticket.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not _can_edit_ticket(user, ticket):
+        raise HTTPException(status_code=403, detail="Seul l'auteur ou un administrateur peut supprimer ce ticket")
+
+    # Retirer les fichiers image du disque avant la suppression ORM (best-effort) /
+    # Remove image files from disk before ORM delete (best-effort).
+    for photo in (ticket.photos or []):
+        try:
+            p = Path(photo.file_path)
+            if p.is_file():
+                p.unlink()
+        except OSError:
+            pass
+
+    await db.delete(ticket)
+    await db.flush()
+    return Response(status_code=204)
 
 
 @router.put("/{ticket_id}/status", response_model=TicketDetail)

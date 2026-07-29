@@ -6,10 +6,13 @@ import { useSearchParams } from 'react-router-dom'
 import api from '../services/api'
 import { CreateTicketModal } from '../components/support/CreateTicketModal'
 import { useAuthStore } from '../stores/useAuthStore'
-import type { Ticket, TicketStatus, TicketType } from '../types'
+import type { Ticket, TicketStatus, TicketType, TicketPriority } from '../types'
 import {
   TICKET_TYPE_LABELS, TICKET_STATUS_LABELS, TICKET_STATUS_COLORS, TICKET_PRIORITY_LABELS,
 } from '../types'
+
+const PRIORITY_ORDER: TicketPriority[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+const TYPE_ORDER: TicketType[] = ['BUG', 'FEATURE', 'QUESTION', 'OTHER']
 
 const STATUS_ORDER: TicketStatus[] = ['OPEN', 'ACKNOWLEDGED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'REJECTED']
 
@@ -43,9 +46,18 @@ export default function Tickets() {
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [exporting, setExporting] = useState(false)
+  /* Édition/suppression du ticket par son auteur (ticket #19) */
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editType, setEditType] = useState<TicketType>('BUG')
+  const [editPriority, setEditPriority] = useState<TicketPriority>('MEDIUM')
   /* Seuls les admins (tickets:update, superadmin inclus) changent le statut */
   const hasPermission = useAuthStore((s) => s.hasPermission)
+  const user = useAuthStore((s) => s.user)
   const canManage = hasPermission('tickets', 'update')
+  /* L'auteur (ou un admin) peut modifier/supprimer son ticket (ticket #19) */
+  const canEdit = !!selected && (canManage || (!!user && selected.created_by_user_id === user.id))
 
   const loadList = useCallback(async () => {
     setLoading(true)
@@ -109,10 +121,9 @@ export default function Tickets() {
     return () => { created.forEach((u) => URL.revokeObjectURL(u)) }
   }, [selected?.id, selected?.photos?.length])
 
-  const addPhotoToTicket = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
+  const uploadPhotoFile = useCallback(async (file: File) => {
     if (!selected || !file || !file.type.startsWith('image/')) return
+    if ((selected.photos?.length ?? 0) >= 5) { alert('Maximum 5 photos par ticket.'); return }
     setUploadingPhoto(true)
     try {
       const fd = new FormData()
@@ -126,6 +137,73 @@ export default function Tickets() {
     } finally {
       setUploadingPhoto(false)
     }
+  }, [selected, loadDetail, loadList])
+
+  const addPhotoToTicket = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (file) uploadPhotoFile(file)
+  }
+
+  /* Ticket #19 : coller une capture (Ctrl+V) dans le ticket ouvert. Ignoré si la
+     modale de création est ouverte (elle gère son propre collage). */
+  useEffect(() => {
+    if (!selected || creating) return
+    const onPaste = (e: ClipboardEvent) => {
+      const img = Array.from(e.clipboardData?.items ?? [])
+        .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+        .map((it) => it.getAsFile())
+        .find((f): f is File => !!f)
+      if (img) { e.preventDefault(); uploadPhotoFile(img) }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [selected, creating, uploadPhotoFile])
+
+  /* Sortir du mode édition dès qu'on change de ticket (ou qu'on ferme) */
+  useEffect(() => { setEditing(false) }, [selected?.id])
+
+  /* Ouvre le formulaire d'édition pré-rempli avec le ticket courant */
+  const startEditing = () => {
+    if (!selected) return
+    setEditTitle(selected.title)
+    setEditDescription(selected.description ?? '')
+    setEditType(selected.ticket_type)
+    setEditPriority(selected.priority)
+    setEditing(true)
+  }
+
+  const saveEditing = async () => {
+    if (!selected || !editTitle.trim()) return
+    setBusy(true)
+    try {
+      const { data } = await api.put<Ticket>(`/tickets/${selected.id}`, {
+        title: editTitle.trim(),
+        description: editDescription.trim() || null,
+        ticket_type: editType,
+        priority: editPriority,
+      })
+      setSelected(data)
+      setEditing(false)
+      loadList()
+    } catch (e) {
+      console.error(e)
+      alert("Échec de la modification du ticket.")
+    } finally { setBusy(false) }
+  }
+
+  const deleteTicket = async () => {
+    if (!selected) return
+    if (!window.confirm(`Supprimer définitivement le ticket #${selected.id} « ${selected.title} » ?\nLes échanges et photos seront également supprimés.`)) return
+    setBusy(true)
+    try {
+      await api.delete(`/tickets/${selected.id}`)
+      setSelected(null)
+      loadList()
+    } catch (e) {
+      console.error(e)
+      alert("Échec de la suppression du ticket.")
+    } finally { setBusy(false) }
   }
 
   /* Exporter le ticket en ZIP (Markdown + JSON + photos) à injecter dans Claude Code */
@@ -264,6 +342,22 @@ export default function Tickets() {
                   <StatusBadge status={selected.status} />
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {canEdit && !editing && (
+                    <>
+                      <button onClick={startEditing} disabled={busy}
+                        title="Modifier ce ticket (auteur ou administrateur)"
+                        className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-lg border transition-all hover:opacity-80 disabled:opacity-50"
+                        style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-primary)' }}>
+                        ✏ Modifier
+                      </button>
+                      <button onClick={deleteTicket} disabled={busy}
+                        title="Supprimer ce ticket (auteur ou administrateur)"
+                        className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-lg border transition-all hover:opacity-80 disabled:opacity-50"
+                        style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)', backgroundColor: 'var(--bg-primary)' }}>
+                        🗑 Supprimer
+                      </button>
+                    </>
+                  )}
                   <button onClick={exportTicket} disabled={exporting}
                     title="Télécharger un ZIP (Markdown + JSON + photos) du ticket"
                     className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-lg border transition-all hover:opacity-80 disabled:opacity-50"
@@ -273,9 +367,38 @@ export default function Tickets() {
                   <button onClick={() => setSelected(null)} className="text-xl leading-none" style={{ color: 'var(--text-muted)' }}>×</button>
                 </div>
               </div>
-              <h3 className="text-lg font-bold mb-1" style={{ color: 'var(--text-primary)' }}>{selected.title}</h3>
-              <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>Ouvert par {selected.created_by_name} · {fmt(selected.created_at)}</p>
-              {selected.description && <p className="text-sm mb-3 whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>{selected.description}</p>}
+              {editing ? (
+                /* Formulaire d'édition (ticket #19) — auteur ou admin */
+                <div className="mb-3 space-y-2">
+                  <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="Titre du ticket"
+                    className="w-full px-3 py-2 rounded-lg border text-sm" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  <textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} rows={4}
+                    placeholder="Description"
+                    className="w-full px-3 py-2 rounded-lg border text-sm resize-none" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <select value={editType} onChange={(e) => setEditType(e.target.value as TicketType)}
+                      className="rounded-lg border px-2 py-1.5 text-xs" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}>
+                      {TYPE_ORDER.map((t) => <option key={t} value={t}>{TICKET_TYPE_LABELS[t]}</option>)}
+                    </select>
+                    <select value={editPriority} onChange={(e) => setEditPriority(e.target.value as TicketPriority)}
+                      className="rounded-lg border px-2 py-1.5 text-xs" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}>
+                      {PRIORITY_ORDER.map((p) => <option key={p} value={p}>{TICKET_PRIORITY_LABELS[p]}</option>)}
+                    </select>
+                    <div className="flex-1" />
+                    <button onClick={() => setEditing(false)} disabled={busy}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Annuler</button>
+                    <button onClick={saveEditing} disabled={busy || !editTitle.trim()}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ backgroundColor: 'var(--color-primary)' }}>Enregistrer</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <h3 className="text-lg font-bold mb-1" style={{ color: 'var(--text-primary)' }}>{selected.title}</h3>
+                  <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>Ouvert par {selected.created_by_name} · {fmt(selected.created_at)}</p>
+                  {selected.description && <p className="text-sm mb-3 whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>{selected.description}</p>}
+                </>
+              )}
 
               {/* Photos / captures jointes */}
               <div className="mb-4">
@@ -283,8 +406,9 @@ export default function Tickets() {
                   <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Photos</h4>
                   {(selected.photos?.length ?? 0) < 5 && (
                     <label className="text-xs cursor-pointer inline-flex items-center gap-1 px-2 py-1 rounded-lg border transition-all hover:opacity-80"
-                      style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-primary)' }}>
-                      {uploadingPhoto ? '…' : '+ Ajouter une photo'}
+                      style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-primary)' }}
+                      title="Ajouter depuis un fichier, ou collez une capture avec Ctrl+V">
+                      {uploadingPhoto ? '…' : '+ Ajouter (ou Ctrl+V)'}
                       <input type="file" accept="image/*" className="hidden" onChange={addPhotoToTicket} disabled={uploadingPhoto} />
                     </label>
                   )}

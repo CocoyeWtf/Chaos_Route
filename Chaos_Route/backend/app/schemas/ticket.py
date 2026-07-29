@@ -36,6 +36,18 @@ class TicketStatusUpdate(BaseModel):
     priority: TicketPriority | None = None
 
 
+class TicketUpdate(BaseModel):
+    """Modification par l'auteur (ou un admin) de son propre ticket / Author edit.
+
+    Le statut n'est PAS modifiable ici (réservé aux admins via /status). Seuls le
+    contenu et la classification saisis par l'auteur sont éditables.
+    """
+    title: str | None = None
+    description: str | None = None
+    ticket_type: TicketType | None = None
+    priority: TicketPriority | None = None
+
+
 class TicketRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

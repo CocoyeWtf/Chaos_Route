@@ -52,3 +52,62 @@ async def test_status_change_no_op_when_same(client):
     resp = await client.put(f"/api/tickets/{tid}/status", json={"status": "OPEN"})
     assert resp.status_code == 200
     assert len(resp.json()["comments"]) == before
+
+
+@pytest.mark.asyncio
+async def test_author_can_edit_and_delete(client):
+    # Ticket #19 : l'auteur modifie puis supprime son propre ticket
+    resp = await client.post("/api/tickets/", json={"title": "Titre initial", "ticket_type": "BUG", "priority": "LOW"})
+    tid = resp.json()["id"]
+
+    resp = await client.put(f"/api/tickets/{tid}", json={"title": "Titre corrigé", "priority": "HIGH", "description": "Détails ajoutés"})
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert d["title"] == "Titre corrigé"
+    assert d["priority"] == "HIGH"
+    assert d["description"] == "Détails ajoutés"
+    # La modification laisse une trace système
+    assert any(c["is_system"] and "modifié" in c["body"] for c in d["comments"])
+
+    # Suppression (cascade échanges/photos) -> 204 puis introuvable
+    resp = await client.delete(f"/api/tickets/{tid}")
+    assert resp.status_code == 204
+    resp = await client.get(f"/api/tickets/{tid}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_non_author_without_permission_cannot_edit_or_delete(client, db_session):
+    """Un utilisateur tiers sans tickets:update ne peut ni modifier ni supprimer
+    le ticket d'autrui (ticket #19 : garde d'autorisation auteur-ou-admin)."""
+    import uuid
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.api.deps import get_current_user
+    from app.main import app
+    from app.models.user import User
+
+    # Ticket créé par le test_user (auteur) via le client authentifié
+    resp = await client.post("/api/tickets/", json={"title": "Ticket protégé", "ticket_type": "BUG"})
+    tid = resp.json()["id"]
+
+    # Utilisateur tiers, non superadmin, sans rôle -> aucune permission
+    suffix = uuid.uuid4().hex[:8]
+    other = User(username=f"other_{suffix}", email=f"other-{suffix}@chaos.test",
+                 hashed_password="x", is_active=True, is_superadmin=False)
+    db_session.add(other)
+    await db_session.commit()
+    # Recharger avec les rôles (vide) pour éviter tout lazy-load hors greenlet
+    res = await db_session.execute(select(User).where(User.id == other.id).options(selectinload(User.roles)))
+    other = res.scalar_one()
+
+    app.dependency_overrides[get_current_user] = lambda: other
+    try:
+        resp = await client.put(f"/api/tickets/{tid}", json={"title": "usurpation"})
+        assert resp.status_code == 403
+        resp = await client.delete(f"/api/tickets/{tid}")
+        assert resp.status_code == 403
+    finally:
+        # Le client fixture nettoie les overrides en teardown, mais on restaure par prudence
+        app.dependency_overrides.pop(get_current_user, None)

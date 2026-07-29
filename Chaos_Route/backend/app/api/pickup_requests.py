@@ -34,6 +34,7 @@ from app.api.deps import (
 )
 from app.models.mobile_device import MobileDevice
 from app.utils.label_templates import LabelData, render as render_label
+from app.utils.support_rules import is_return_support_code
 
 router = APIRouter()
 
@@ -107,8 +108,12 @@ def _generate_label_code(pdv_code: str, support_code: str, date_str: str, seq: i
 async def _pickup_form_data(db: AsyncSession, scope_pdv_id: int | None) -> dict:
     """Données du formulaire (types de support actifs + PDV accessibles).
     scope_pdv_id : si fourni, n'expose que ce PDV (user PDV ou tablette)."""
+    # Ticket #15 : l'encodage d'un retour ne doit proposer que les supports
+    # retournables (CO/PA/PL/RE + SF 40040/40104/40204). Les casiers bière (SF 3xxxx)
+    # relèvent du flux consignes dédié et sont exclus ici — même règle que
+    # l'inventaire PDV mobile (/driver/inventory-lookup). / Restrict to returnable supports.
     st_result = await db.execute(select(SupportType).where(SupportType.is_active == True).order_by(SupportType.code))
-    support_types = st_result.scalars().all()
+    support_types = [st for st in st_result.scalars().all() if is_return_support_code(st.code)]
 
     pdv_query = select(PDV).order_by(PDV.code)
     if scope_pdv_id is not None:

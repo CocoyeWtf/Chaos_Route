@@ -51,15 +51,18 @@ def _apk_sha256(apk_path: Path) -> str | None:
 # Mettre a jour a chaque build APK / Update on each APK build
 # IMPORTANT : build_number doit etre STRICTEMENT SUPERIEUR a celui dans l'APK sur le serveur
 # pour declencher la mise a jour. Egal ou inferieur = pas de mise a jour.
-APP_VERSION = "1.9.0"
-APP_BUILD_NUMBER = 11
+APP_VERSION = "1.9.3"
+APP_BUILD_NUMBER = 14
 
 # Coupe-circuit auto-update / Auto-update kill switch.
-# Mis a False en urgence : le build 11 (1.9.0) affiche un ecran blanc au demarrage.
-# On ne force plus la mise a jour pour ne pas "bricker" les tablettes encore sur
-# l'ancien build. A remettre a True une fois un build corrige (12) servi.
-# Emergency kill switch: build 11 white-screens at launch — stop forcing updates.
-FORCE_UPDATE = False
+# Reactive (ticket #14) : le build 14 (1.9.3) corrige l'ecran blanc du build 11
+# (correctif ecran blanc en build 12) + persistance session PDV et ecran noir au
+# redemarrage (builds 13/14). La mise a jour forcee est donc reactivee.
+# INVARIANT ANTI-BRICKING : ce numero DOIT correspondre a l'APK reellement servi
+# a apk/cmro-driver.apk sur le serveur. Ne passer a True qu'APRES avoir depose
+# l'APK vc14 sur le serveur, sinon les tablettes sont forcees vers un APK errone.
+# Emergency kill switch: re-enabled once the fixed vc14 APK is served.
+FORCE_UPDATE = True
 
 
 @router.get("/app/version")

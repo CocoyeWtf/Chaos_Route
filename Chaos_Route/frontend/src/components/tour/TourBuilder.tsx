@@ -97,6 +97,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const [tempUpgradeDialog, setTempUpgradeDialog] = useState<{ volume: Volume; upgradeTo: TemperatureType } | null>(null)
   /* Filtre température pour carte + liste volumes / Temperature filter for map + volume list */
   const [tempFilters, setTempFilters] = useState<Set<TemperatureClass>>(new Set())
+  /* Filtre base d'origine (ticket #20) : différencier le lieu de départ des volumes SEC */
+  const [baseFilters, setBaseFilters] = useState<Set<number>>(new Set())
 
   /* Persistence localStorage des tailles / localStorage persistence for panel sizes */
   const outerLayout = useDefaultLayout({ id: 'tour-h' })
@@ -110,6 +112,15 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   }, [allVolumes, selectedDate])
   const { data: pdvs } = useApi<PDV>('/pdvs', regionParams)
   const { data: bases } = useApi<BaseLogistics>('/bases', regionParams)
+  /* Bases d'origine présentes dans les volumes du jour, pour les puces de filtre (ticket #20) */
+  const availableBases = useMemo(() => {
+    const ids = new Set<number>()
+    volumes.forEach((v) => { if (v.base_origin_id != null) ids.add(v.base_origin_id) })
+    return Array.from(ids)
+      .map((id) => bases.find((b) => b.id === id))
+      .filter((b): b is BaseLogistics => b != null)
+      .sort((a, b) => a.code.localeCompare(b.code))
+  }, [volumes, bases])
   const { data: distances } = useApi<DistanceEntry>('/distance-matrix')
   const { data: contracts } = useApi<Contract>('/contracts', regionParams)
   const { data: pickupSummaries } = useApi<PdvPickupSummary>('/pickup-requests/by-pdv/pending')
@@ -1369,6 +1380,9 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                           pickupSummaries={pickupSummaries}
                           tempFilters={tempFilters}
                           onTempFiltersChange={setTempFilters}
+                          baseFilters={baseFilters}
+                          onBaseFiltersChange={setBaseFilters}
+                          availableBases={availableBases}
                         />
                       )}
                     </div>
@@ -1491,6 +1505,9 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                               pickupSummaries={pickupSummaries}
                               tempFilters={tempFilters}
                               onTempFiltersChange={setTempFilters}
+                              baseFilters={baseFilters}
+                              onBaseFiltersChange={setBaseFilters}
+                              availableBases={availableBases}
                             />
                           )}
                         </div>
@@ -1583,6 +1600,9 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
               pickupSummaries={pickupSummaries}
               tempFilters={tempFilters}
               onTempFiltersChange={setTempFilters}
+              baseFilters={baseFilters}
+              onBaseFiltersChange={setBaseFilters}
+              availableBases={availableBases}
             />
           )}
           {vehicleBanner}

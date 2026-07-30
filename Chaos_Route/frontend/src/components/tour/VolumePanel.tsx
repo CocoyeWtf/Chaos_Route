@@ -43,11 +43,16 @@ interface VolumePanelProps {
   /* Filtre température contrôlé par le parent / Temperature filter controlled by parent */
   tempFilters: Set<TemperatureClass>
   onTempFiltersChange: (filters: Set<TemperatureClass>) => void
+  /* Filtre base d'origine contrôlé par le parent (ticket #20) / Origin base filter */
+  baseFilters: Set<number>
+  onBaseFiltersChange: (filters: Set<number>) => void
+  availableBases: { id: number; code: string; name: string }[]
 }
 
 export function VolumePanel({
   volumes, pdvs, consumedVolumeIds, onAddVolume, vehicleCapacity, currentEqp,
   lastStopPdvId, baseId, distanceIndex, pickupSummaries, tempFilters, onTempFiltersChange,
+  baseFilters, onBaseFiltersChange, availableBases,
 }: VolumePanelProps) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
@@ -65,6 +70,13 @@ export function VolumePanel({
     if (next.has(cls)) next.delete(cls)
     else next.add(cls)
     onTempFiltersChange(next)
+  }
+
+  const toggleBaseFilter = (id: number) => {
+    const next = new Set(baseFilters)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    onBaseFiltersChange(next)
   }
 
   /* Fonction lookup distance bidirectionnelle / Bidirectional distance lookup */
@@ -95,6 +107,11 @@ export function VolumePanel({
       filtered = filtered.filter((v) => tempFilters.has(v.temperature_class))
     }
 
+    /* Filtrer par base d'origine (ticket #20) / Filter by origin base */
+    if (baseFilters.size > 0) {
+      filtered = filtered.filter((v) => baseFilters.has(v.base_origin_id))
+    }
+
     const consumed = filtered.filter((v) => consumedVolumeIds.has(v.id))
     const available = filtered.filter((v) => !consumedVolumeIds.has(v.id))
 
@@ -110,7 +127,7 @@ export function VolumePanel({
     withDist.sort((a, b) => a.km - b.km)
 
     return [...withDist.map((w) => w.vol), ...consumed]
-  }, [volumes, consumedVolumeIds, lastStopPdvId, baseId, distanceIndex, search, pdvMap, tempFilters])
+  }, [volumes, consumedVolumeIds, lastStopPdvId, baseId, distanceIndex, search, pdvMap, tempFilters, baseFilters])
 
   /* Distance affichée par volume / Displayed distance per volume */
   const getDisplayDistance = (pdvId: number): number | null => {
@@ -162,6 +179,30 @@ export function VolumePanel({
             )
           })}
         </div>
+        {/* Chips filtre base d'origine (ticket #20) — n'apparaît que si plusieurs
+            bases sont présentes dans les volumes du jour / Origin base filter chips */}
+        {availableBases.length > 1 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {availableBases.map((b) => {
+              const active = baseFilters.has(b.id)
+              return (
+                <button
+                  key={b.id}
+                  title={b.name}
+                  className="px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border"
+                  style={{
+                    backgroundColor: active ? 'var(--color-primary)' : 'transparent',
+                    borderColor: 'var(--color-primary)',
+                    color: active ? '#fff' : 'var(--color-primary)',
+                  }}
+                  onClick={() => toggleBaseFilter(b.id)}
+                >
+                  {b.code}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">

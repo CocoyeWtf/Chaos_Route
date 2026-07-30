@@ -166,6 +166,8 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   const [activityFilter, setActivityFilter] = useState('ALL')
   /* Filtre chauffeur / Driver filter */
   const [driverFilter, setDriverFilter] = useState('ALL')
+  /* Filtre base d'origine (ticket #20) : différencier le lieu de départ / Origin base filter */
+  const [baseFilter, setBaseFilter] = useState('ALL')
   /* Filtres multi-select / Multi-select filters */
   const [vehicleTypeFilters, setVehicleTypeFilters] = useState<Set<VehicleType>>(new Set())
   const [modeFilters, setModeFilters] = useState<Set<AssignmentMode>>(new Set())
@@ -379,6 +381,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     if (onlyToPlan) result = result.filter(t => !t.departure_time)
     if (activityFilter !== 'ALL') result = result.filter(t => t.temperature_type === activityFilter)
     if (driverFilter !== 'ALL') result = result.filter(t => tourVehicleMap.get(t.id) === driverFilter)
+    if (baseFilter !== 'ALL') result = result.filter(t => String(t.base_id) === baseFilter)
     if (vehicleTypeFilters.size > 0) {
       result = result.filter(t => t.vehicle_type && vehicleTypeFilters.has(t.vehicle_type))
     }
@@ -392,7 +395,17 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
       result = result.filter(t => t.contract_id != null && contractFilters.has(t.contract_id))
     }
     return result
-  }, [tours, showValidated, onlyToPlan, activityFilter, driverFilter, tourVehicleMap, vehicleTypeFilters, modeFilters, contractFilters])
+  }, [tours, showValidated, onlyToPlan, activityFilter, driverFilter, baseFilter, tourVehicleMap, vehicleTypeFilters, modeFilters, contractFilters])
+
+  /* Bases d'origine présentes dans les tours du jour (ticket #20) / Origin bases present in today's tours */
+  const availableBases = useMemo(() => {
+    const ids = new Set<number>()
+    tours.forEach((t) => { if (t.base_id != null) ids.add(t.base_id) })
+    return Array.from(ids)
+      .map((id) => bases.find((b) => b.id === id))
+      .filter((b): b is BaseLogistics => b != null)
+      .sort((a, b) => a.code.localeCompare(b.code))
+  }, [tours, bases])
 
   /* Liste unique triée: planifiés d'abord par heure départ, puis non-planifiés /
      Unified sorted list: scheduled first by departure time, then unscheduled */
@@ -1213,6 +1226,26 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               <option value="ALL">Tous</option>
               {driverNames.map((name) => (
                 <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Filtre base d'origine (ticket #20) / Origin base filter */}
+        {availableBases.length > 1 && (
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+              Base d'origine
+            </label>
+            <select
+              className="px-2 py-2 text-xs rounded-lg border"
+              style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+              value={baseFilter}
+              onChange={(e) => setBaseFilter(e.target.value)}
+            >
+              <option value="ALL">Toutes</option>
+              {availableBases.map((b) => (
+                <option key={b.id} value={String(b.id)}>{b.code} — {b.name}</option>
               ))}
             </select>
           </div>

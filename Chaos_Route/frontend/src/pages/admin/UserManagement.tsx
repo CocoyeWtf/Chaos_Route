@@ -11,6 +11,22 @@ import { DriverBadgeCard } from '../../components/print/DriverBadgeCard'
 import { useAuthStore } from '../../stores/useAuthStore'
 import type { UserAccount, Role, Region, PDV, Supplier, Tenant } from '../../types'
 
+/* Extrait un message lisible d'une erreur API (ticket #21) : le backend renvoie
+   soit un `detail` string (400 : « Username or email already exists »), soit une
+   liste de validation Pydantic (422 : politique de mot de passe, champ manquant). */
+function extractApiError(err: unknown): string {
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) => (d && typeof d === 'object' && 'msg' in d ? String((d as { msg: unknown }).msg) : ''))
+      .map((m) => m.replace(/^Value error,\s*/i, ''))
+      .filter(Boolean)
+    if (msgs.length) return msgs.join(' · ')
+  }
+  return "Échec de l'enregistrement. Vérifiez les champs et réessayez."
+}
+
 export default function UserManagement() {
   const { t } = useTranslation()
   const isSuperadmin = useAuthStore((s) => s.user?.is_superadmin ?? false)
@@ -27,6 +43,7 @@ export default function UserManagement() {
   const [editItem, setEditItem] = useState<Record<string, unknown> | undefined>()
   const [deleteId, setDeleteId] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
   const [badgeUser, setBadgeUser] = useState<UserAccount | null>(null)
 
   const columns: Column<UserAccount>[] = [
@@ -81,6 +98,7 @@ export default function UserManagement() {
       type: 'password',
       required: !editItem?.id,
       placeholder: editItem?.id ? t('admin.users.passwordPlaceholder') : undefined,
+      helperText: 'Au moins 12 caractères, avec au moins 3 types parmi : minuscule, majuscule, chiffre, symbole.',
     },
     // Société (tenant) — superadmin uniquement / Tenant — superadmin only
     ...(isSuperadmin ? [{
@@ -156,10 +174,12 @@ export default function UserManagement() {
 
   const handleCreate = () => {
     setEditItem(undefined)
+    setFormError(null)
     setFormOpen(true)
   }
 
   const handleEdit = (row: UserAccount) => {
+    setFormError(null)
     setEditItem({
       ...row,
       role_ids: row.roles.map((r) => String(r.id)),
@@ -175,6 +195,7 @@ export default function UserManagement() {
 
   const handleSave = useCallback(async (formData: Record<string, unknown>) => {
     setSaving(true)
+    setFormError(null)
     try {
       const pdvIdVal = formData.pdv_id ? Number(formData.pdv_id) : null
       const supplierIdVal = formData.supplier_id ? Number(formData.supplier_id) : null
@@ -207,6 +228,11 @@ export default function UserManagement() {
       setFormOpen(false)
       setEditItem(undefined)
       refetch()
+    } catch (err) {
+      // Ticket #21 : ne plus avaler l'erreur (création silencieuse). On affiche le
+      // message serveur (doublon, politique de mot de passe…) et on garde le
+      // dialogue ouvert pour correction. / Surface the error, keep the dialog open.
+      setFormError(extractApiError(err))
     } finally {
       setSaving(false)
     }
@@ -240,12 +266,13 @@ export default function UserManagement() {
 
       <FormDialog
         open={formOpen}
-        onClose={() => { setFormOpen(false); setEditItem(undefined) }}
+        onClose={() => { setFormOpen(false); setEditItem(undefined); setFormError(null) }}
         onSubmit={handleSave}
         title={editItem?.id ? t('admin.users.edit') : t('admin.users.new')}
         fields={fields}
         initialData={editItem}
         loading={saving}
+        error={formError}
         size="md"
       />
 

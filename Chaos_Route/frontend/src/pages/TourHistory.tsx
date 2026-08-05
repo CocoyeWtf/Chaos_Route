@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useApi } from '../hooks/useApi'
 import { useAppStore } from '../stores/useAppStore'
-import { remove } from '../services/api'
+import { remove, downloadTourHistory } from '../services/api'
 import type { Tour, BaseLogistics, Contract } from '../types'
 import { TOUR_TYPE_LABELS } from '../types'
 import type { Column } from '../components/data/DataTable'
@@ -19,6 +19,7 @@ export default function TourHistory() {
   const [deleting, setDeleting] = useState<number | null>(null)
   const [costTourId, setCostTourId] = useState<number | null>(null)
   const [gpsTour, setGpsTour] = useState<{ id: number; code: string } | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   const params = selectedRegionId ? { region_id: selectedRegionId } : undefined
   const { data: tours, loading, refetch } = useApi<Tour>('/tours', params)
@@ -34,6 +35,17 @@ export default function TourHistory() {
     IN_PROGRESS: 'var(--color-warning)',
     RETURNING: 'var(--color-info, #3b82f6)',
     COMPLETED: 'var(--color-success)',
+  }
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      await downloadTourHistory(selectedRegionId)
+    } catch (e) {
+      console.error('Failed to export tour history', e)
+    } finally {
+      setExporting(false)
+    }
   }
 
   const handleDelete = async (tour: Tour) => {
@@ -213,9 +225,20 @@ export default function TourHistory() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--text-primary)' }}>
-        {t('tourHistory.title')}
-      </h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
+          {t('tourHistory.title')}
+        </h2>
+        <button
+          className="text-sm font-medium px-3 py-2 rounded transition-colors hover:opacity-80 disabled:opacity-50"
+          style={{ color: 'white', backgroundColor: 'var(--color-success)' }}
+          onClick={handleExport}
+          disabled={exporting || loading}
+          title="Exporter l'historique des tours en Excel"
+        >
+          {exporting ? '...' : '⬇ Exporter Excel'}
+        </button>
+      </div>
 
       {loading ? (
         <p style={{ color: 'var(--text-muted)' }}>{t('common.loading')}</p>

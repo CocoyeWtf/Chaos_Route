@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+from openpyxl.styles import Font
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -170,6 +171,151 @@ async def export_wms_infolog(
     wb.save(content)
     content.seek(0)
     filename = f"TMS_vers_wms_{date}.xlsx"
+    return StreamingResponse(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# Libellés FR alignés sur l'historique web / FR labels mirroring the web history.
+_TOUR_TYPE_LABELS = {
+    "ENLEVEMENT": "Enlèvement",
+    "VIDANGES": "Vidanges",
+    "DEPLACEMENT_BASE": "Déplacement",
+    "GARAGE": "Garage",
+    "TRANSFERT_PDV": "Transfert PDV",
+    "ENLEVEMENT_DEDIE": "Enlèvement dédié",
+}
+_TOUR_STATUS_LABELS = {
+    "DRAFT": "Brouillon",
+    "VALIDATED": "Validé",
+    "IN_PROGRESS": "En cours",
+    "RETURNING": "En retour",
+    "COMPLETED": "Terminé",
+}
+
+
+def _dt_local(value: str | None) -> str:
+    """Rend un datetime-local (YYYY-MM-DDTHH:MM) lisible (T → espace)."""
+    if not value:
+        return ""
+    return value.replace("T", " ")
+
+
+def _num(value: object) -> float | None:
+    """Numeric/Decimal → float (openpyxl ne sérialise pas Decimal)."""
+    return float(value) if value is not None else None
+
+
+# NB : déclarée AVANT la route dynamique /{entity_type} pour ne pas être capturée
+# par celle-ci / Declared BEFORE /{entity_type} so it isn't shadowed.
+@router.get("/tour-history")
+async def export_tour_history(
+    region_id: int | None = Query(None, description="Filtrer sur une région"),
+    base_id: int | None = Query(None, description="Filtrer sur une base logistique"),
+    date_from: str | None = Query(None, description="Date de début (YYYY-MM-DD, incluse)"),
+    date_to: str | None = Query(None, description="Date de fin (YYYY-MM-DD, incluse)"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-history", "read")),
+):
+    """Export Excel de l'historique des tours (ticket #17, phase 1 — manuel).
+
+    Reprend les colonnes complètes de la page « Historique des tours ». Une ligne
+    par tour, respectant le périmètre régional de l'utilisateur et les filtres
+    optionnels (région, base, plage de dates).
+    """
+    query = (
+        select(Tour)
+        .options(
+            selectinload(Tour.stops),
+            selectinload(Tour.contract),
+            selectinload(Tour.base),
+        )
+    )
+    if base_id is not None:
+        query = query.where(Tour.base_id == base_id)
+    if date_from is not None:
+        query = query.where(Tour.date >= date_from)
+    if date_to is not None:
+        query = query.where(Tour.date <= date_to)
+
+    # Périmètre région : filtre demandé + périmètre de l'utilisateur /
+    # Region scope: requested filter + user's own scope
+    region_filter_ids: list[int] | None = None
+    user_region_ids = get_user_region_ids(user)
+    if region_id is not None:
+        region_filter_ids = [region_id]
+    if user_region_ids is not None:
+        region_filter_ids = (
+            [r for r in region_filter_ids if r in user_region_ids]
+            if region_filter_ids is not None else list(user_region_ids)
+        )
+    if region_filter_ids is not None:
+        base_q = select(BaseLogistics.id).where(BaseLogistics.region_id.in_(region_filter_ids))
+        allowed_bases = (await db.execute(base_q)).scalars().all()
+        query = query.where(Tour.base_id.in_(allowed_bases))
+
+    query = query.order_by(Tour.date.desc(), Tour.id.desc())
+    tours = list((await db.execute(query)).scalars().all())
+
+    headers = [
+        "Code", "Nature", "Date", "Base", "Véhicule", "Transporteur", "Arrêts",
+        "EQC", "Km", "Coût (€)", "Statut", "Départ prévu", "Priorité",
+        "Retour prévu", "Chauffeur", "Arrivée chauffeur", "Fin chargement",
+        "Top départ", "Sortie barrière", "Retour barrière",
+    ]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Historique tours"
+    ws.append(headers)
+
+    for tour in tours:
+        ttype = tour.tour_type.value if tour.tour_type is not None else "LIVRAISON"
+        nature = "Livraison" if ttype == "LIVRAISON" else _TOUR_TYPE_LABELS.get(ttype, ttype)
+
+        c = tour.contract
+        if c is None:
+            vehicle = ""
+            transporter = ""
+        else:
+            vehicle = f"{c.vehicle_code} — {c.vehicle_name or ''}" if c.vehicle_code else c.code
+            transporter = c.transporter_name or ""
+
+        ws.append([
+            tour.code,
+            nature,
+            tour.date,
+            tour.base.name if tour.base is not None else f"#{tour.base_id}",
+            vehicle,
+            transporter,
+            len(tour.stops),
+            _num(tour.total_eqp),
+            _num(tour.total_km),
+            _num(tour.total_cost),
+            _TOUR_STATUS_LABELS.get(tour.status.value, tour.status.value),
+            tour.departure_time or "",
+            tour.priority if tour.priority is not None else "",
+            tour.return_time or "",
+            tour.driver_name or "",
+            _dt_local(tour.driver_arrival_time),
+            _dt_local(tour.loading_end_time),
+            _dt_local(tour.departure_signal_time),
+            _dt_local(tour.barrier_exit_time),
+            _dt_local(tour.barrier_entry_time),
+        ])
+
+    # En-tête en gras + volet figé / Bold header + freeze pane
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+
+    content = io.BytesIO()
+    wb.save(content)
+    content.seek(0)
+    today = datetime.now().strftime("%Y-%m-%d")
+    filename = f"historique-tours_{today}.xlsx"
     return StreamingResponse(
         content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

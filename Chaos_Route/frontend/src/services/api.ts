@@ -142,6 +142,25 @@ export async function downloadExport(entity: string, format: 'csv' | 'xlsx' = 'x
   window.URL.revokeObjectURL(url)
 }
 
+/* Télécharger l'export Excel de l'historique des tours (ticket #17) /
+   Download the tour-history Excel export. */
+export async function downloadTourHistory(regionId?: number | null): Promise<void> {
+  const response = await api.get('/exports/tour-history', {
+    params: regionId ? { region_id: regionId } : undefined,
+    responseType: 'blob',
+  })
+  const today = new Date().toISOString().slice(0, 10)
+  const blob = new Blob([response.data])
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `historique-tours_${today}.xlsx`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 /* Fetch wrapper avec gestion token automatique / Fetch wrapper with auto token handling.
    Utilise l'instance axios avec intercepteurs / Uses the axios instance with interceptors. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

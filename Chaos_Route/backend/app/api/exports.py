@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font
-from sqlalchemy import select
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import io
@@ -316,6 +316,145 @@ async def export_tour_history(
     content.seek(0)
     today = datetime.now().strftime("%Y-%m-%d")
     filename = f"historique-tours_{today}.xlsx"
+    return StreamingResponse(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# Colonnes de la feuille « Tours » (Tournées ERT) de 07-08 Planning.xlsm reproduites
+# à l'identique : infos tournée (A-M), 16 paires PDV/EQC (N-AS), colonnes
+# d'exploitation postier/garde (AT-BG). / "Tours" (ERT) sheet columns reproduced.
+_PLANNING_PDV_PAIRS = 16
+_PLANNING_HEADERS = (
+    ["Ordre", "N° Mission", "Chargeurs", "Code Ch.", "Type Tour", "Chauffeurs",
+     "Trac", "Semi", "Gel", "TKT", "Observations/Enlèvement", "Départ", "Retour"]
+    + [lab for k in range(1, _PLANNING_PDV_PAIRS + 1) for lab in (f"PDV {k}", f"E.P{k}")]
+    + ["H.Départ", "Porte", "T°", "H. disp. Semi", "Eqc Prévis.", "EQC Chargés",
+       "Top Départ", "Prés. sur site", "H.Sortie", "H.Retour", "Kms départ",
+       "Kms retour", "KM calculé", "Remarque Garde"]
+)
+# Index 1-based de la 1re colonne PDV (N) et de la 1re colonne d'exploitation (AT)
+_PLANNING_PDV_COL0 = 14
+_PLANNING_OPS_COL0 = _PLANNING_PDV_COL0 + 2 * _PLANNING_PDV_PAIRS  # = 46 (AT)
+
+
+@router.get("/postier-planning")
+async def export_postier_planning(
+    date: str = Query(..., description="Date de livraison (YYYY-MM-DD)"),
+    base_id: int = Query(..., description="Base logistique"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("operations", "read")),
+):
+    """Export Excel du planning postier — feuille « Tours » (Tournées ERT).
+
+    Reproduit la mise en page de 07-08 Planning.xlsm (feuille Tours) : une ligne
+    par tournée du jour (ordre ERT), la séquence des PDV avec leur EQC, et les
+    colonnes d'exploitation (tops, kms…) que le postier/la garde renseignent.
+    Les colonnes sans équivalent dans l'app (Type Tour, TKT, Remarque Garde)
+    restent vides.
+    """
+    query = (
+        select(Tour)
+        .where(
+            Tour.base_id == base_id,
+            or_(
+                Tour.delivery_date == date,
+                and_(Tour.delivery_date.is_(None), Tour.date == date),
+            ),
+        )
+        .options(
+            selectinload(Tour.stops).selectinload(TourStop.pdv),
+            selectinload(Tour.base),
+            selectinload(Tour.contract),
+            selectinload(Tour.vehicle),
+            selectinload(Tour.tractor),
+        )
+    )
+    # Périmètre région de l'utilisateur / User region scope
+    region_ids = get_user_region_ids(user)
+    if region_ids is not None:
+        allowed = (await db.execute(
+            select(BaseLogistics.id).where(BaseLogistics.region_id.in_(region_ids))
+        )).scalars().all()
+        query = query.where(Tour.base_id.in_(allowed))
+
+    tours = list((await db.execute(query)).scalars().all())
+    # Ordre ERT : priorité (NULL en dernier), puis heure de départ, puis code
+    tours.sort(key=lambda t: (
+        t.priority is None, t.priority or 0, t.departure_time or "", t.code,
+    ))
+
+    def _base_disp(b) -> str:
+        return f"{b.code} ({b.name})" if b else ""
+
+    def _eqc(v) -> float | None:
+        return float(v) if v is not None else None
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Tours"
+    # Titre (comme l'original : « Tournées ERT du » + date)
+    ws.cell(2, 3, "Tournées ERT du")
+    ws.cell(2, 8, date)
+    # En-têtes en ligne 6
+    for i, label in enumerate(_PLANNING_HEADERS, start=1):
+        cell = ws.cell(6, i, label)
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A7"
+
+    r = 7
+    for rank, tour in enumerate(tours, start=1):
+        base_disp = _base_disp(tour.base)
+        gel = "O" if (tour.temperature_type and "GEL" in tour.temperature_type) else "N"
+        trac = tour.tractor.code if tour.tractor else ""
+        semi = (
+            tour.vehicle.code if tour.vehicle
+            else (tour.contract.vehicle_code if tour.contract and tour.contract.vehicle_code else (tour.trailer_number or ""))
+        )
+        ws.cell(r, 1, tour.priority if tour.priority is not None else rank)
+        ws.cell(r, 2, tour.wms_tour_code or tour.code)
+        ws.cell(r, 3, tour.loader_name or "")
+        ws.cell(r, 4, tour.loader_code or "")
+        # 5 = Type Tour (pas d'équivalent) — laissé vide
+        ws.cell(r, 6, tour.driver_name or "")
+        ws.cell(r, 7, trac)
+        ws.cell(r, 8, semi)
+        ws.cell(r, 9, gel)
+        # 10 = TKT — laissé vide
+        ws.cell(r, 11, tour.remarks or tour.destination or "")
+        ws.cell(r, 12, base_disp)
+        ws.cell(r, 13, base_disp)
+        # PDV 1..16 + EQC (colonnes N..AS)
+        stops = sorted(tour.stops, key=lambda s: s.sequence_order)
+        for k, stop in enumerate(stops[:_PLANNING_PDV_PAIRS]):
+            pdv = stop.pdv
+            pdv_disp = (f"{pdv.code} ({pdv.city})" if pdv and pdv.city else (pdv.code if pdv else "")) if pdv else ""
+            ws.cell(r, _PLANNING_PDV_COL0 + 2 * k, pdv_disp)
+            ws.cell(r, _PLANNING_PDV_COL0 + 2 * k + 1, _eqc(stop.eqp_count))
+        # Colonnes d'exploitation (AT..BG)
+        c = _PLANNING_OPS_COL0
+        ws.cell(r, c, tour.departure_time or "")               # AT H.Départ
+        ws.cell(r, c + 1, tour.dock_door_number or "")          # AU Porte
+        ws.cell(r, c + 2, tour.temperature_type or "")          # AV T°
+        ws.cell(r, c + 3, _dt_local(tour.trailer_ready_time))   # AW H. disp. Semi
+        ws.cell(r, c + 4, _eqc(tour.total_eqp))                 # AX Eqc Prévis.
+        ws.cell(r, c + 5, tour.eqp_loaded)                      # AY EQC Chargés
+        ws.cell(r, c + 6, _dt_local(tour.departure_signal_time))  # AZ Top Départ
+        ws.cell(r, c + 7, _dt_local(tour.driver_arrival_time))  # BA Prés. sur site
+        ws.cell(r, c + 8, _dt_local(tour.barrier_exit_time))    # BB H.Sortie
+        ws.cell(r, c + 9, _dt_local(tour.barrier_entry_time))   # BC H.Retour
+        ws.cell(r, c + 10, tour.km_departure)                   # BD Kms départ
+        ws.cell(r, c + 11, tour.km_return)                      # BE Kms retour
+        ws.cell(r, c + 12, _eqc(tour.total_km))                # BF KM calculé
+        # BG Remarque Garde — laissé vide
+        r += 1
+
+    content = io.BytesIO()
+    wb.save(content)
+    content.seek(0)
+    filename = f"planning-postier_{date}.xlsx"
     return StreamingResponse(
         content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

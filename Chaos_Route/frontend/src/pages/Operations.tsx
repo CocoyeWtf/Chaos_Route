@@ -3,7 +3,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Fragment } from 'react'
 import { useTranslation } from 'react-i18next'
 import { QRCodeSVG } from 'qrcode.react'
-import api from '../services/api'
+import api, { downloadPostierPlanning } from '../services/api'
 import type { Tour, BaseLogistics, Contract, PDV, Volume, ManifestLine, ManifestImportResult, MobileDevice, VehicleSummary, TemperatureClass } from '../types'
 import { TEMPERATURE_COLORS, TOUR_TYPE_LABELS } from '../types'
 import { TourWaybill } from '../components/tour/TourWaybill'
@@ -85,6 +85,19 @@ export default function Operations() {
   const [assignDriverName, setAssignDriverName] = useState('')
   const [assignBusy, setAssignBusy] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<string>('')
+  const [exportingPlanning, setExportingPlanning] = useState(false)
+
+  const handleExportPlanning = useCallback(async () => {
+    if (!baseId) return
+    setExportingPlanning(true)
+    try {
+      await downloadPostierPlanning(date, baseId)
+    } catch (e) {
+      console.error('Failed to export postier planning', e)
+    } finally {
+      setExportingPlanning(false)
+    }
+  }, [date, baseId])
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   /* Préférences colonnes et split / Column & split preferences */
@@ -604,6 +617,17 @@ export default function Operations() {
             <option value="">{t('operations.selectBase')}</option>
             {bases.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
           </select>
+        </div>
+        <div className="flex items-end">
+          <button
+            onClick={handleExportPlanning}
+            disabled={!baseId || exportingPlanning || tours.length === 0}
+            className="px-3 py-2 rounded-lg border text-sm font-medium transition-colors hover:opacity-80 disabled:opacity-50"
+            style={{ color: 'white', backgroundColor: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+            title="Exporter le planning du jour au format Excel (feuille Tours / Tournées ERT)"
+          >
+            {exportingPlanning ? '...' : '⬇ Export planning (Excel)'}
+          </button>
         </div>
       </div>
 

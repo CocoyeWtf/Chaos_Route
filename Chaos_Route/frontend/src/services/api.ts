@@ -161,6 +161,24 @@ export async function downloadTourHistory(regionId?: number | null): Promise<voi
   window.URL.revokeObjectURL(url)
 }
 
+/* Télécharger l'export planning postier (feuille « Tours » / Tournées ERT) /
+   Download the dispatcher planning export (ERT tours layout). */
+export async function downloadPostierPlanning(date: string, baseId: number): Promise<void> {
+  const response = await api.get('/exports/postier-planning', {
+    params: { date, base_id: baseId },
+    responseType: 'blob',
+  })
+  const blob = new Blob([response.data])
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `planning-postier_${date}.xlsx`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 /* Fetch wrapper avec gestion token automatique / Fetch wrapper with auto token handling.
    Utilise l'instance axios avec intercepteurs / Uses the axios instance with interceptors. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

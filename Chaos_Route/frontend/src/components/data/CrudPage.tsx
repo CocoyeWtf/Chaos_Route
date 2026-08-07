@@ -71,6 +71,14 @@ export function CrudPage<T extends { id: number }>({
   const canCreate = !resource || hasPermission(resource, 'create')
   const canUpdate = !resource || hasPermission(resource, 'update')
   const canDelete = !resource || hasPermission(resource, 'delete')
+  // Import/export sont servis par des endpoints dédiés (/imports, /exports) gardés
+  // par la ressource `imports-exports`, PAS par la ressource de la page. Gater les
+  // boutons sur la même permission que le back, sinon un rôle voit un bouton qui
+  // renvoie 403 (ex. R Cam : volumes:create sans imports-exports:create). /
+  // Import & export hit dedicated endpoints gated by `imports-exports`, not the
+  // page resource — gate the buttons on the same permission as the backend.
+  const canImport = hasPermission('imports-exports', 'create')
+  const canExport = hasPermission('imports-exports', 'read')
   const { data, loading, refetch } = useApi<T>(endpoint, apiParams)
 
   const [formOpen, setFormOpen] = useState(false)
@@ -170,8 +178,8 @@ export function CrudPage<T extends { id: number }>({
         onEdit={canUpdate ? handleEdit : undefined}
         onDelete={canDelete ? ((row) => setDeleteId(row.id)) : undefined}
         onDuplicate={allowDuplicate && canCreate ? handleDuplicate : undefined}
-        onImport={importEntity && canCreate ? () => setImportOpen(true) : undefined}
-        onExport={exportEntity ? (format) => downloadExport(exportEntity, format) : undefined}
+        onImport={importEntity && canImport ? () => setImportOpen(true) : undefined}
+        onExport={exportEntity && canExport ? (format) => downloadExport(exportEntity, format) : undefined}
         onBulkDelete={allowBulkDelete && canDelete ? handleBulkDelete : undefined}
       />
 

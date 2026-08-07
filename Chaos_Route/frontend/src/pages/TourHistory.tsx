@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useApi } from '../hooks/useApi'
 import { useAppStore } from '../stores/useAppStore'
+import { useAuthStore } from '../stores/useAuthStore'
 import { remove, downloadTourHistory } from '../services/api'
 import type { Tour, BaseLogistics, Contract } from '../types'
 import { TOUR_TYPE_LABELS } from '../types'
@@ -16,6 +17,9 @@ import { displayDateTime, formatDate } from '../utils/tourTimeUtils'
 export default function TourHistory() {
   const { t } = useTranslation()
   const { selectedRegionId } = useAppStore()
+  // L'export hit /exports/tour-history (gardé par tour-history:read) : gater le
+  // bouton sur la même permission que le back. / Gate export on the backend perm.
+  const canExport = useAuthStore((s) => s.hasPermission)('tour-history', 'read')
   const [deleting, setDeleting] = useState<number | null>(null)
   const [costTourId, setCostTourId] = useState<number | null>(null)
   const [gpsTour, setGpsTour] = useState<{ id: number; code: string } | null>(null)
@@ -229,15 +233,17 @@ export default function TourHistory() {
         <h2 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
           {t('tourHistory.title')}
         </h2>
-        <button
-          className="text-sm font-medium px-3 py-2 rounded transition-colors hover:opacity-80 disabled:opacity-50"
-          style={{ color: 'white', backgroundColor: 'var(--color-success)' }}
-          onClick={handleExport}
-          disabled={exporting || loading}
-          title="Exporter l'historique des tours en Excel"
-        >
-          {exporting ? '...' : '⬇ Exporter Excel'}
-        </button>
+        {canExport && (
+          <button
+            className="text-sm font-medium px-3 py-2 rounded transition-colors hover:opacity-80 disabled:opacity-50"
+            style={{ color: 'white', backgroundColor: 'var(--color-success)' }}
+            onClick={handleExport}
+            disabled={exporting || loading}
+            title="Exporter l'historique des tours en Excel"
+          >
+            {exporting ? '...' : '⬇ Exporter Excel'}
+          </button>
+        )}
       </div>
 
       {loading ? (

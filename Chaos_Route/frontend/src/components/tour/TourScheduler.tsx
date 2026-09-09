@@ -9,7 +9,7 @@ import { TourGantt, type GanttTour } from './TourGantt'
 import { TourPrintPlan } from './TourPrintPlan'
 import { formatDuration, parseTime, formatTime, formatDate, DEFAULT_DOCK_TIME, DEFAULT_UNLOAD_PER_EQP } from '../../utils/tourTimeUtils'
 import { VEHICLE_TYPE_DEFAULTS, TEMPERATURE_TYPE_LABELS, TEMPERATURE_COLORS, TOUR_TYPE_LABELS } from '../../types'
-import api from '../../services/api'
+import api, { downloadPostierPlanning } from '../../services/api'
 import { CostBreakdown } from './CostBreakdown'
 import { TransporterConfirmationModal, type ConfirmTransporter } from './TransporterConfirmationModal'
 import type { Tour, BaseLogistics, Contract, DistanceEntry, PDV, VehicleType, TemperatureType, TemperatureClass, Volume, Vehicle, AssignmentMode, AvailableVehicle } from '../../types'
@@ -151,6 +151,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   const [reorderingStopId, setReorderingStopId] = useState<number | null>(null)
   const [recalculating, setRecalculating] = useState(false)
   const [exportingWms, setExportingWms] = useState(false)
+  const [exportingPlanning, setExportingPlanning] = useState(false)
   const [costTourId, setCostTourId] = useState<number | null>(null)
   const [showPrintPlan, setShowPrintPlan] = useState(false)
   /* Modale mail de confirmation transporteur / Carrier confirmation email modal */
@@ -813,6 +814,22 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     }
   }
 
+  /* Export Excel « Tournées ERT » à l'ordonnancement (ticket #78) — même format que
+     l'onglet postier. Requiert une base d'origine précise (l'endpoint est par base). /
+     Postier-planning ERT export at scheduling step; requires a specific origin base. */
+  const handleExportPlanning = async () => {
+    if (!selectedDate || baseFilter === 'ALL') return
+    setExportingPlanning(true)
+    try {
+      await downloadPostierPlanning(selectedDate, Number(baseFilter))
+    } catch (e) {
+      console.error('Failed to export postier planning', e)
+      alert("Échec de l'export Excel (Tournées ERT).")
+    } finally {
+      setExportingPlanning(false)
+    }
+  }
+
   const updateInput = (
     tourId: number,
     field: 'time' | 'contractId' | 'deliveryDate' | 'mode' | 'vehicleId' | 'tractorId' | 'driverName' | 'priority',
@@ -1345,6 +1362,18 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 {exportingWms ? '...' : 'WMS'}
+              </button>
+              <button
+                onClick={handleExportPlanning}
+                disabled={exportingPlanning || baseFilter === 'ALL'}
+                className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80 disabled:opacity-40"
+                style={{ borderColor: 'var(--color-success)', color: 'var(--color-success)' }}
+                title={baseFilter === 'ALL'
+                  ? "Sélectionnez une base d'origine précise pour exporter le planning (Tournées ERT) au format Excel"
+                  : "Export Excel du planning ordonnancé (feuille Tours / Tournées ERT), même format que l'onglet postier"}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                {exportingPlanning ? '...' : 'Export Excel'}
               </button>
               {transportersForDate.length > 0 && (
                 <button

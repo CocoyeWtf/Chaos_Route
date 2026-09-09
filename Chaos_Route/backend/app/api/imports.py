@@ -625,15 +625,33 @@ async def import_data(
     # rattaché à la société cible. / Block tenant-scoped imports by a tenant-less user.
     from app.models.mixins import TenantMixin
     from app.api.deps import get_user_tenant_id
+    from app.database import set_session_tenant
     if issubclass(ENTITY_MODEL_MAP[entity_type], TenantMixin) and get_user_tenant_id(user) is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Import refusé : votre compte n'est rattaché à aucune société (superadmin). "
-                "Connectez-vous avec un compte de la société cible (ex. France) pour importer "
-                "ces données, sinon elles seraient invisibles aux utilisateurs."
-            ),
-        )
+        # Compte sans tenant courant (superadmin / consolidation). Plutôt que de refuser
+        # tout import (ce qui bloquait les superadmins — ticket #22), on cible SANS
+        # AMBIGUÏTÉ la société de la base d'origine fournie : la base appartient à un
+        # tenant, les volumes importés sont donc stampés sur CE tenant et le replace/
+        # dedup y restent scopés. À défaut d'ancre fiable (pas de base d'origine), on
+        # refuse (garde anti-orphelins tenant_id=NULL, incident du 2026-06-22). /
+        # Resolve the unambiguous target society from the selected origin base.
+        target_tenant: int | None = None
+        if base_origin_id is not None:
+            base = await db.get(BaseLogistics, base_origin_id)
+            target_tenant = base.tenant_id if base else None
+        if target_tenant is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Import refusé : votre compte n'est rattaché à aucune société "
+                    "(superadmin) et la société cible n'a pas pu être déterminée. "
+                    "Sélectionnez une base d'origine, ou connectez-vous avec un compte "
+                    "de la société cible."
+                ),
+            )
+        # Appliquer le tenant cible pour la durée de l'import : stampe les INSERT et
+        # scope les lookups + le replace/DELETE sur cette seule société. / Apply the
+        # target tenant so inserts are stamped and replace/lookups stay scoped.
+        set_session_tenant(db, target_tenant)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")

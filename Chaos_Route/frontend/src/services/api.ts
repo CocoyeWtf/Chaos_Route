@@ -101,9 +101,36 @@ function withSlash(url: string): string {
 }
 
 /* Fonctions CRUD génériques / Generic CRUD functions */
+/* Récupère la TOTALITÉ d'une collection en paginant (ticket #27). / Fetch a whole
+   collection by paginating.
+
+   Historique du bug : ce helper faisait un seul GET sans `limit`, héritant donc du
+   plafond par défaut des endpoints (volumes = 500). Toute collection > 500 chargée via
+   useApi était silencieusement tronquée (les plus récents seulement), faussant la
+   construction/l'ordonnancement des tours et masquant les volumes anciens.
+
+   Comportement :
+   - si l'appelant fixe déjà `limit`/`offset`, on respecte son fetch borné (un seul GET) ;
+   - sinon on boucle par pages de PAGE, en ne continuant que tant qu'une page est
+     EXACTEMENT pleine. Une page plus courte = fin des données. Une page plus grande que
+     PAGE = l'endpoint ignore notre `limit` (pas de pagination) → on s'arrête pour éviter
+     une boucle. CAP borne le total par sécurité. */
 export async function fetchAll<T>(endpoint: string, params?: Record<string, unknown>): Promise<T[]> {
-  const { data } = await api.get<T[]>(withSlash(endpoint), { params })
-  return data
+  if (params && ('limit' in params || 'offset' in params)) {
+    const { data } = await api.get<T[]>(withSlash(endpoint), { params })
+    return data
+  }
+  const PAGE = 1000
+  const CAP = 50000 // garde-fou anti-emballement / runaway guard
+  const all: T[] = []
+  let offset = 0
+  for (;;) {
+    const { data } = await api.get<T[]>(withSlash(endpoint), { params: { ...params, limit: PAGE, offset } })
+    all.push(...data)
+    if (data.length !== PAGE || all.length >= CAP) break
+    offset += PAGE
+  }
+  return all
 }
 
 export async function fetchOne<T>(endpoint: string, id: number): Promise<T> {

@@ -48,6 +48,20 @@ class TailgateType(str, enum.Enum):
     RABATTABLE = "RABATTABLE"
 
 
+class TrailerSupply(str, enum.Enum):
+    """Qui fournit la remorque / Who supplies the trailer.
+
+    Un contrat peut être éligible aux deux modes : certains transporteurs
+    amènent leur remorque sur le frais (presté) mais tractent une remorque
+    frigo CMRO sur le gel (mixte). / A contract can be eligible for both
+    modes: some carriers bring their own trailer on chilled tours but tow a
+    CMRO freezer trailer on frozen tours.
+    """
+    CARRIER = "CARRIER"   # Le transporteur amène sa remorque → presté uniquement
+    CMRO = "CMRO"         # Nous fournissons la remorque (traction) → mixte uniquement
+    BOTH = "BOTH"         # Les deux, le choix se fait par tournée à l'ordonnancement
+
+
 class Contract(Base, TenantMixin):
     """1 contrat = 1 moyen (véhicule) mis à disposition / 1 contract = 1 vehicle provided."""
     __tablename__ = "contracts"
@@ -99,6 +113,13 @@ class Contract(Base, TenantMixin):
     # NULL = not yet set (legacy contracts, team to fill in)
     provides_tractor: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     provides_trailer: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Source de vérité pour la remorque depuis le ticket #41. NULL = contrat non
+    # migré → on retombe sur provides_trailer (cf. effective_trailer_supply()). /
+    # Source of truth for the trailer since ticket #41. NULL = unmigrated
+    # contract → falls back to provides_trailer.
+    trailer_supply: Mapped[TrailerSupply | None] = mapped_column(
+        Enum(TrailerSupply, name="trailer_supply"), nullable=True
+    )
 
     # Lien vers vehicule autonome (si applicable) / Link to standalone vehicle
     vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id"))
@@ -116,3 +137,22 @@ class Contract(Base, TenantMixin):
 
     def __repr__(self) -> str:
         return f"<Contract {self.code} - {self.transporter_name}>"
+
+
+def effective_trailer_supply(contract) -> TrailerSupply | None:
+    """Fourniture de remorque effective d'un contrat / Effective trailer supply.
+
+    Retombe sur l'ancien booléen tant que le contrat n'a pas été repassé en
+    revue par le trafic. None = inconnu (legacy) : ne filtre rien. /
+    Falls back to the legacy boolean until traffic reviews the contract.
+    None = unknown (legacy): filters nothing out.
+    """
+    supply = getattr(contract, "trailer_supply", None)
+    if supply is not None:
+        return supply
+    provides = getattr(contract, "provides_trailer", None)
+    if provides is True:
+        return TrailerSupply.CARRIER
+    if provides is False:
+        return TrailerSupply.CMRO
+    return None

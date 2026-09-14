@@ -1620,21 +1620,20 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                 /* Remorques internes disponibles (vehicles non-tracteurs) /
                    Internal trailers available (non-tractor vehicles) */
                 const ownTrailers = availableVehiclesMap[tour.id]?.vehicles ?? []
-                /* Filtrer selon le mode : preste exige tracteur+remorque fournis,
-                   mixte exige tracteur fourni sans remorque (on prete la notre).
-                   NULL (legacy) est laisse passer pour compat. /
-                   Filter by mode: preste needs tractor+trailer provided,
-                   mixte needs tractor without trailer (we lend ours).
-                   NULL (legacy) passes through for compat. */
-                const contracts = input.mode === 'preste'
-                  ? allContracts.filter(c =>
-                      (c.provides_tractor == null || c.provides_tractor === true)
-                      && (c.provides_trailer == null || c.provides_trailer === true))
-                  : input.mode === 'mixte'
-                    ? allContracts.filter(c =>
-                        (c.provides_tractor == null || c.provides_tractor === true)
-                        && (c.provides_trailer == null || c.provides_trailer === false))
-                    : allContracts
+                /* Filtrer selon le mode : preste exige que le transporteur amene
+                   sa remorque, mixte qu'on prete la notre. BOTH (#41) passe dans
+                   les deux. NULL (legacy) est laisse passer pour compat. /
+                   Filter by mode: preste needs the carrier's own trailer, mixte
+                   needs ours. BOTH (#41) passes in both. NULL (legacy) passes. */
+                const contracts = input.mode === 'preste' || input.mode === 'mixte'
+                  ? allContracts.filter(c => {
+                      if (!(c.provides_tractor == null || c.provides_tractor === true)) return false
+                      const supply = c.trailer_supply
+                        ?? (c.provides_trailer == null ? null : c.provides_trailer ? 'CARRIER' : 'CMRO')
+                      if (supply == null || supply === 'BOTH') return true
+                      return input.mode === 'preste' ? supply === 'CARRIER' : supply === 'CMRO'
+                    })
+                  : allContracts
                 const ownTractors = availableVehiclesMap[tour.id]?.tractors ?? []
                 const selectedContract = contracts.find((c) => c.id === input.contractId)
                 /* Aligne avec handleSchedule : propre exige un tracteur,

@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.base_logistics import BaseLogistics
-from app.models.contract import Contract
+from app.models.contract import Contract, TrailerSupply
 from app.models.contract_schedule import ContractSchedule
 from app.models.user import User
 from app.schemas.contract import (
@@ -101,6 +101,20 @@ async def get_contract(
     return contract
 
 
+def _sync_provides_trailer(contract) -> None:
+    """Garder l'ancien booléen cohérent avec trailer_supply (#41).
+
+    `provides_trailer` reste lu par l'export/import et les clients non migrés :
+    on le maintient aligné, BOTH comptant comme « amène sa remorque ». /
+    Keep the legacy boolean aligned with trailer_supply; BOTH counts as
+    "brings its own trailer" for legacy readers.
+    """
+    supply = contract.trailer_supply
+    if supply is None:
+        return
+    contract.provides_trailer = supply is not TrailerSupply.CMRO
+
+
 @router.post("/", response_model=ContractRead, status_code=201)
 async def create_contract(
     data: ContractCreate,
@@ -110,6 +124,7 @@ async def create_contract(
     schedules_data = data.schedules
     contract_data = data.model_dump(exclude={"schedules"})
     contract = Contract(**contract_data)
+    _sync_provides_trailer(contract)
     db.add(contract)
     await db.flush()
 
@@ -139,6 +154,7 @@ async def update_contract(
         raise HTTPException(status_code=404, detail="Contract not found")
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(contract, key, value)
+    _sync_provides_trailer(contract)
     await db.flush()
     result = await db.execute(
         select(Contract).where(Contract.id == contract.id).options(selectinload(Contract.schedules), selectinload(Contract.carrier))

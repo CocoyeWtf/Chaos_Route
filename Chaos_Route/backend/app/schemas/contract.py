@@ -1,8 +1,15 @@
 """Schémas Contrat (fusionné véhicule) / Contract schemas (merged with vehicle)."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.models.contract import FuelType, TailgateType, TemperatureType, VehicleType
+from app.models.contract import (
+    FuelType,
+    TailgateType,
+    TemperatureType,
+    TrailerSupply,
+    VehicleType,
+    effective_trailer_supply,
+)
 from app.schemas.carrier import CarrierRead
 
 
@@ -51,6 +58,7 @@ class ContractBase(BaseModel):
     tailgate_type: TailgateType | None = None
     provides_tractor: bool | None = None
     provides_trailer: bool | None = None
+    trailer_supply: TrailerSupply | None = None
     vehicle_id: int | None = None
     carrier_id: int | None = None
 
@@ -90,6 +98,7 @@ class ContractUpdate(BaseModel):
     tailgate_type: TailgateType | None = None
     provides_tractor: bool | None = None
     provides_trailer: bool | None = None
+    trailer_supply: TrailerSupply | None = None
     vehicle_id: int | None = None
     carrier_id: int | None = None
 
@@ -99,3 +108,12 @@ class ContractRead(ContractBase):
     id: int
     schedules: list[ContractScheduleRead] = []
     carrier: CarrierRead | None = None
+
+    @model_validator(mode="after")
+    def _resolve_trailer_supply(self):
+        """Exposer la valeur effective pour les contrats non encore migrés (#41),
+        afin que le formulaire affiche le bon choix. / Expose the effective value
+        for contracts not migrated yet, so the form shows the right choice."""
+        if self.trailer_supply is None:
+            self.trailer_supply = effective_trailer_supply(self)
+        return self

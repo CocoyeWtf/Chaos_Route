@@ -507,6 +507,9 @@ export interface Contract {
   tailgate_type?: TailgateType
   provides_tractor?: boolean | null
   provides_trailer?: boolean | null
+  /** Qui fournit la remorque : transporteur (presté), CMRO (mixte), ou les deux
+   *  selon la tournée (#41). / Who supplies the trailer. */
+  trailer_supply?: 'CARRIER' | 'CMRO' | 'BOTH' | null
   schedules?: ContractSchedule[]
   carrier_id?: number
   carrier?: Carrier

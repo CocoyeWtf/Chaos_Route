@@ -120,7 +120,16 @@ export default function ContractManagement() {
     { key: 'tailgate_type', label: t('vehicles.tailgateType'), type: 'select', options: tailgateOptions },
     // Fourniture transporteur / Carrier provides
     { key: 'provides_tractor', label: 'Transporteur fournit le tracteur', type: 'checkbox', helperText: 'Coche si le transporteur amene son tracteur (presté ou traction).' },
-    { key: 'provides_trailer', label: 'Transporteur fournit la remorque', type: 'checkbox', helperText: 'Coche si le transporteur amene sa remorque (presté). En traction nous fournissons la remorque.' },
+    {
+      key: 'trailer_supply', label: 'Remorque', type: 'select',
+      options: [
+        { value: 'CARRIER', label: 'Le transporteur amene la sienne (presté)' },
+        { value: 'CMRO', label: 'Nous la fournissons (traction / mixte)' },
+        { value: 'BOTH', label: 'Les deux, selon la tournée' },
+      ],
+      helperText: "Choisis « Les deux » si le transporteur amene sa remorque sur certaines tournees (frais) mais tracte une remorque CMRO sur d'autres (gel). Le mode preste/mixte reste choisi par tournee a l'ordonnancement.",
+      colSpan: 2,
+    },
     // Carburant (obligatoire) / Fuel type (required)
     {
       key: 'fuel_type', label: t('contracts.fuelType'), type: 'select', required: true,
@@ -210,6 +219,7 @@ export default function ContractManagement() {
             region_id: Number(d.region_id),
             carrier_id: cid,
             billing_type: d.billing_type ? Number(d.billing_type) : null,
+            trailer_supply: d.trailer_supply || null,
             transporter_name: carrier?.name ?? d.transporter_name ?? '',
           }
         }}

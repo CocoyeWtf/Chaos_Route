@@ -464,7 +464,7 @@ async def available_contracts_for_tours(
 ):
     """Contrats disponibles à une date/heure / Available contracts at a date/time."""
     from app.models.contract_schedule import ContractSchedule
-    from app.models.contract import TemperatureType
+    from app.models.contract import TemperatureType, TrailerSupply, effective_trailer_supply
 
     base_result = await db.execute(select(BaseLogistics).where(BaseLogistics.id == base_id))
     base = base_result.scalar_one_or_none()
@@ -494,17 +494,18 @@ async def available_contracts_for_tours(
     # Filter on what the carrier provides (presté vs mixte/traction).
     # NULL = unset (legacy contracts) → kept to avoid breaking during data
     # migration.
-    if mode == "preste":
+    # #41 : un contrat peut être éligible aux DEUX modes (remorque transporteur
+    # sur le frais, remorque CMRO sur le gel) → trailer_supply=BOTH passe les
+    # deux filtres. / #41: a contract can be eligible for BOTH modes.
+    if mode in ("preste", "mixte"):
+        allowed = (
+            {TrailerSupply.CARRIER, TrailerSupply.BOTH} if mode == "preste"
+            else {TrailerSupply.CMRO, TrailerSupply.BOTH}
+        )
         available = [
             c for c in available
             if (c.provides_tractor is None or c.provides_tractor is True)
-            and (c.provides_trailer is None or c.provides_trailer is True)
-        ]
-    elif mode == "mixte":
-        available = [
-            c for c in available
-            if (c.provides_tractor is None or c.provides_tractor is True)
-            and (c.provides_trailer is None or c.provides_trailer is False)
+            and (effective_trailer_supply(c) or TrailerSupply.BOTH) in allowed
         ]
 
     # Filtre temperature : FRAIS match FRAIS+BI_TEMP+TRI_TEMP, GEL match GEL+BI_TEMP+TRI_TEMP, etc.
@@ -554,6 +555,7 @@ async def available_contracts_for_tours(
             "tailgate_type": c.tailgate_type.value if (c.tailgate_type and hasattr(c.tailgate_type, 'value')) else c.tailgate_type,
             "provides_tractor": c.provides_tractor,
             "provides_trailer": c.provides_trailer,
+            "trailer_supply": (effective_trailer_supply(c).value if effective_trailer_supply(c) else None),
             "start_date": c.start_date,
             "end_date": c.end_date,
             "region_id": c.region_id,

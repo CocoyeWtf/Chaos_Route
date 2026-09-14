@@ -142,7 +142,13 @@ def compute_cost(tour, contract, nb_tours: int, fuel_price: float, km_tax_total:
     # Type 2 (tractionnaire sous contrat) : barème complet
     km = float(tour.total_km or 0)
     t_fixe = round(float(contract.fixed_daily_cost or 0) / nb, 2)          # vacation = fixe ÷ nb
-    t_rem = round(float(getattr(contract, "trailer_cost", 0) or 0) / nb, 2)  # remorque ÷ nb
+    # Remorque ÷ nb — SEULEMENT si le transporteur amène la sienne (presté).
+    # En mixte c'est NOTRE remorque (tour.vehicle_id renseigne) : ne pas
+    # facturer t_rem, cf. ticket #41. / Trailer fee only when the carrier
+    # brings its own (presté); in mixte the trailer is ours.
+    t_rem = 0.0 if getattr(tour, "vehicle_id", None) else round(
+        float(getattr(contract, "trailer_cost", 0) or 0) / nb, 2
+    )
     t_km = round(km * float(contract.cost_per_km or 0), 2)
     gasoil = round(km * _consumption(contract, tour) * (fuel_price or 0), 2)
     t_horaire = round(_prestation_hours(tour) * float(contract.cost_per_hour or 0), 2)

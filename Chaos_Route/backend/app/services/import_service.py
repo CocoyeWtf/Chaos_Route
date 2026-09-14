@@ -300,7 +300,7 @@ class ImportService:
                        "start_date", "end_date", "region_id",
                        "vehicle_code", "vehicle_name", "temperature_type", "vehicle_type",
                        "capacity_eqp", "capacity_weight_kg", "has_tailgate", "tailgate_type",
-                       "provides_tractor", "provides_trailer"],
+                       "provides_tractor", "provides_trailer", "trailer_supply"],
         "distances": ["origin_type", "origin_id", "destination_type", "destination_id", "distance_km", "duration_minutes"],
         "km-tax": ["origin_type", "origin_id", "destination_type", "destination_id", "tax_per_km"],
         "cnuf-temperatures": ["cnuf", "filiale", "temperature_type", "label", "base_id"],

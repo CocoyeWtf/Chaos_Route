@@ -45,6 +45,21 @@ def test_cost_type2_weekday():
     assert c["cout_tournee"] == 426.5  # 200+50+54+20+50+32.5+20
 
 
+def test_trailer_fee_not_billed_in_mixte():
+    """Ticket #41 : en mixte la remorque est la NOTRE (tour.vehicle_id) ->
+    t_rem n'est pas facture. En preste il l'est."""
+    tour = _tour("2026-06-08")
+    tour.vehicle_id = 77  # remorque CMRO affectee => mode mixte
+    c = compute_cost(tour, _contract(), nb_tours=1, fuel_price=1.8, km_tax_total=0)
+    assert c["t_rem"] == 0
+    assert c["cout_tournee"] == 574   # 400+50+54+20+50 (sans les 65 de remorque)
+
+    preste = _tour("2026-06-08")      # pas de vehicle_id => preste
+    c2 = compute_cost(preste, _contract(), nb_tours=1, fuel_price=1.8, km_tax_total=0)
+    assert c2["t_rem"] == 65
+    assert c2["cout_tournee"] == 639  # 574 + 65
+
+
 def test_consumption_by_vehicle_type():
     # Pas de consumption_coefficient -> défaut par type véhicule
     semi = compute_cost(_tour("2026-06-08", "SEMI"), _contract(consumption_coefficient=None),

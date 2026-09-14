@@ -1671,6 +1671,40 @@ async def create_tour(
         for s in data.stops
     ]
 
+    # Garde anti double-planification (#83) : un volume deja rattache a une autre
+    # tournee ne doit pas repartir dans une seconde. Sans ce controle, la tournee
+    # etait creee avec un arret FANTOME (EQC comptes, volume non rattache), et la
+    # reprise gloutonne pouvait avaler un AUTRE volume du meme PDV pour atteindre
+    # la cible EQC. Le cas se produit quand deux planificateurs travaillent en
+    # meme temps, ou quand la liste affichee n'est plus a jour. /
+    # Double-planning guard: a volume already attached to another tour must not be
+    # planned again — otherwise the tour was created with a phantom stop.
+    explicit_volume_ids = [s["volume_id"] for s in stops_input if s.get("volume_id") is not None]
+    if explicit_volume_ids:
+        taken = (await db.execute(
+            select(Volume)
+            .options(selectinload(Volume.pdv))
+            .where(Volume.id.in_(explicit_volume_ids), Volume.tour_id.is_not(None))
+        )).scalars().all()
+        if taken:
+            tour_codes = dict((await db.execute(
+                select(Tour.id, Tour.code).where(Tour.id.in_({v.tour_id for v in taken}))
+            )).all())
+            details = ", ".join(
+                f"{(v.pdv.code if v.pdv else f'PDV #{v.pdv_id}')} "
+                f"({float(v.eqp_count or 0):.2f} EQC) deja dans la tournee "
+                f"{tour_codes.get(v.tour_id, f'#{v.tour_id}')}"
+                for v in taken
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Volume(s) deja planifie(s) dans une autre tournee : "
+                    f"{details}. Retirez ce(s) point(s) de vente du tour, "
+                    "puis reessayez (rafraichissez la liste des volumes)."
+                ),
+            )
+
     if data.departure_time:
         enriched_stops, return_time, total_duration = await calculate_tour_times(
             data.departure_time, stops_input, data.base_id, db

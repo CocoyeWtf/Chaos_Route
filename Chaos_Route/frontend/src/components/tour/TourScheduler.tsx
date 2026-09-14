@@ -116,7 +116,15 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   const { data: allContracts } = useApi<Contract>('/contracts', regionParams)
   const { data: distances } = useApi<DistanceEntry>('/distance-matrix')
   const { data: pdvs } = useApi<PDV>('/pdvs', regionParams)
-  const { data: allVolumes } = useApi<Volume>('/volumes', regionParams)
+  /* Volumes de la journée affichée uniquement (#83) — cf. TourBuilder. /
+     Only the displayed day's volumes. */
+  const volumeParams = useMemo(() => {
+    const p: Record<string, unknown> = {}
+    if (selectedRegionId) p.region_id = selectedRegionId
+    if (selectedDate) p.dispatch_date = selectedDate
+    return Object.keys(p).length > 0 ? p : undefined
+  }, [selectedRegionId, selectedDate])
+  const { data: allVolumes } = useApi<Volume>('/volumes', volumeParams)
 
   const contractMap = useMemo(() => new Map(allContracts.map((c) => [c.id, c])), [allContracts])
 
@@ -227,7 +235,10 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     }
     try {
       const [toursRes, timelineRes] = await Promise.all([
-        api.get<Tour[]>('/tours/', { params: { date: selectedDate } }),
+        /* limit explicite : l'endpoint plafonne a 200 par defaut, une journee
+           chargee serait tronquee en silence (meme famille que #27). /
+           Explicit limit: the endpoint defaults to 200 and would silently truncate. */
+        api.get<Tour[]>('/tours/', { params: { date: selectedDate, limit: 2000 } }),
         api.get<GanttTour[]>('/tours/timeline', { params: { date: selectedDate } }),
       ])
       setTours(toursRes.data)

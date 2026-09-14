@@ -22,6 +22,7 @@ async def list_volumes(
     date: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    dispatch_date: str | None = None,
     base_origin_id: int | None = None,
     limit: int = Query(default=500, le=5000),
     offset: int = Query(default=0, ge=0),
@@ -38,6 +39,14 @@ async def list_volumes(
         query = query.where(Volume.date >= date_from)
     if date_to is not None:
         query = query.where(Volume.date <= date_to)
+    # `date` et `dispatch_date` sont DEUX colonnes distinctes : `date` = date du
+    # volume, `dispatch_date` = date de répartition, celle sur laquelle les vues
+    # de planification travaillent. Sans ce filtre, le front chargeait tout
+    # l'historique pour n'en garder qu'une journée (#27 suivi / #83 lenteur). /
+    # `date` and `dispatch_date` are two distinct columns; planning views work on
+    # dispatch_date. Without this filter the front loaded the whole history.
+    if dispatch_date is not None:
+        query = query.where(Volume.dispatch_date == dispatch_date)
     if base_origin_id is not None:
         query = query.where(Volume.base_origin_id == base_origin_id)
     # Scope région via PDV : filtre explicite (sélecteur UI) + périmètre régional de

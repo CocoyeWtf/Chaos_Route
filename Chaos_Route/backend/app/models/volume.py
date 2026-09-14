@@ -22,6 +22,9 @@ class Volume(Base, TenantMixin):
         Index("ix_volumes_pdv_date", "pdv_id", "date"),
         Index("ix_volumes_base_date", "base_origin_id", "date"),
         Index("ix_volumes_tour_id", "tour_id"),
+        # Les vues de planification filtrent sur la date de repartition a chaque
+        # chargement (#83) / Planning views filter on dispatch_date on every load.
+        Index("ix_volumes_dispatch_date", "dispatch_date"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

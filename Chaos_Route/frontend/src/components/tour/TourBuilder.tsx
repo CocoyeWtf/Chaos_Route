@@ -105,7 +105,19 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const innerLayout = useDefaultLayout({ id: 'tour-inner' })
 
   const regionParams = selectedRegionId ? { region_id: selectedRegionId } : undefined
-  const { data: allVolumes, refetch: refetchVolumes } = useApi<Volume>('/volumes', regionParams)
+  /* Charger UNIQUEMENT les volumes de la journée affichée (#83) : sans ce filtre
+     le front récupérait tout l'historique (13 000+ lignes, 14 requêtes) pour n'en
+     garder qu'une journée — d'où la lenteur, et la fenêtre pendant laquelle un
+     volume déjà planifié restait affiché comme disponible. /
+     Load only the displayed day's volumes: without this the front fetched the
+     whole history to keep a single day. */
+  const volumeParams = useMemo(() => {
+    const p: Record<string, unknown> = {}
+    if (selectedRegionId) p.region_id = selectedRegionId
+    if (selectedDate) p.dispatch_date = selectedDate
+    return Object.keys(p).length > 0 ? p : undefined
+  }, [selectedRegionId, selectedDate])
+  const { data: allVolumes, refetch: refetchVolumes } = useApi<Volume>('/volumes', volumeParams)
   const volumes = useMemo(() => {
     if (!selectedDate) return allVolumes.filter((v) => !v.tour_id)
     return allVolumes.filter((v) => v.dispatch_date === selectedDate && !v.tour_id)
@@ -722,6 +734,10 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
     } catch (e: unknown) {
       console.error('Failed to save tour', e)
       alert(`Echec de la sauvegarde du brouillon: ${getApiErrorMessage(e)}`)
+      /* Un refus vient souvent d'un volume pris entre-temps (#83) : resynchroniser
+         la liste pour qu'il cesse d'apparaître comme disponible. / A rejection
+         often means a volume was taken meanwhile: resync the list. */
+      refetchVolumes()
     } finally {
       setSaving(false)
     }

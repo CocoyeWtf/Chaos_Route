@@ -188,11 +188,18 @@ export async function downloadTourHistory(regionId?: number | null): Promise<voi
   window.URL.revokeObjectURL(url)
 }
 
-/* Télécharger l'export planning postier (feuille « Tours » / Tournées ERT) /
-   Download the dispatcher planning export (ERT tours layout). */
-export async function downloadPostierPlanning(date: string, baseId: number): Promise<void> {
+/* Télécharger l'export planning postier (feuille « Tours » / Tournées ERT).
+   `source` dit sur quelle date filtrer : 'postier' = date de livraison,
+   'ordonnancement' = date de planification (ticket #78). Sans `baseId`, toutes
+   les bases du périmètre. / Download the dispatcher planning export; `source`
+   selects the date field, `baseId` optional (all bases in scope when omitted). */
+export async function downloadPostierPlanning(
+  date: string,
+  baseId?: number,
+  source: 'postier' | 'ordonnancement' = 'postier',
+): Promise<void> {
   const response = await api.get('/exports/postier-planning', {
-    params: { date, base_id: baseId },
+    params: { date, source, ...(baseId ? { base_id: baseId } : {}) },
     responseType: 'blob',
   })
   const blob = new Blob([response.data])

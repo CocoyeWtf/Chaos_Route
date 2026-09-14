@@ -91,7 +91,7 @@ export default function Operations() {
     if (!baseId) return
     setExportingPlanning(true)
     try {
-      await downloadPostierPlanning(date, baseId)
+      await downloadPostierPlanning(date, baseId, 'postier')
     } catch (e) {
       console.error('Failed to export postier planning', e)
     } finally {

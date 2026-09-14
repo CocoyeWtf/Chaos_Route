@@ -815,13 +815,17 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   }
 
   /* Export Excel « Tournées ERT » à l'ordonnancement (ticket #78) — même format que
-     l'onglet postier. Requiert une base d'origine précise (l'endpoint est par base). /
-     Postier-planning ERT export at scheduling step; requires a specific origin base. */
+     l'onglet postier, mais sur la date de PLANIFICATION (celle de cette vue) et
+     limité aux tours ordonnancés. Le filtre base est facultatif : il est masqué
+     quand une seule base est présente, ce qui bloquait l'export. /
+     ERT export at scheduling step: planning date, scheduled tours only; the base
+     filter is optional since it is hidden when a single base is present. */
   const handleExportPlanning = async () => {
-    if (!selectedDate || baseFilter === 'ALL') return
+    if (!selectedDate) return
     setExportingPlanning(true)
     try {
-      await downloadPostierPlanning(selectedDate, Number(baseFilter))
+      const baseId = baseFilter === 'ALL' ? undefined : Number(baseFilter)
+      await downloadPostierPlanning(selectedDate, baseId, 'ordonnancement')
     } catch (e) {
       console.error('Failed to export postier planning', e)
       alert("Échec de l'export Excel (Tournées ERT).")
@@ -1365,12 +1369,12 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               </button>
               <button
                 onClick={handleExportPlanning}
-                disabled={exportingPlanning || baseFilter === 'ALL'}
+                disabled={exportingPlanning}
                 className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80 disabled:opacity-40"
                 style={{ borderColor: 'var(--color-success)', color: 'var(--color-success)' }}
                 title={baseFilter === 'ALL'
-                  ? "Sélectionnez une base d'origine précise pour exporter le planning (Tournées ERT) au format Excel"
-                  : "Export Excel du planning ordonnancé (feuille Tours / Tournées ERT), même format que l'onglet postier"}
+                  ? "Export Excel du planning ordonnancé (feuille Tours / Tournées ERT) — toutes bases d'origine"
+                  : "Export Excel du planning ordonnancé (feuille Tours / Tournées ERT) — base d'origine sélectionnée"}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 {exportingPlanning ? '...' : 'Export Excel'}

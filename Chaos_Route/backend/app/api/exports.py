@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import io
@@ -18,7 +18,7 @@ from app.models.base_logistics import BaseLogistics
 from app.models.pdv import PDV
 from app.models.parameter import Parameter
 from app.models.supplier import Supplier
-from app.models.tour import Tour
+from app.models.tour import Tour, TourStatus
 from app.models.tour_stop import TourStop
 from app.models.volume import Volume
 from app.models.contract import Contract
@@ -342,8 +342,12 @@ _PLANNING_OPS_COL0 = _PLANNING_PDV_COL0 + 2 * _PLANNING_PDV_PAIRS  # = 46 (AT)
 
 @router.get("/postier-planning")
 async def export_postier_planning(
-    date: str = Query(..., description="Date de livraison (YYYY-MM-DD)"),
-    base_id: int = Query(..., description="Base logistique"),
+    date: str = Query(..., description="Date (livraison si source=postier, planification si source=ordonnancement)"),
+    base_id: int | None = Query(None, description="Base logistique ; toutes si absent"),
+    source: str = Query(
+        "postier", pattern="^(postier|ordonnancement)$",
+        description="Vue d'origine : postier (date de livraison) | ordonnancement (date de planification)",
+    ),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("operations", "read")),
 ):
@@ -354,16 +358,32 @@ async def export_postier_planning(
     colonnes d'exploitation (tops, kms…) que le postier/la garde renseignent.
     Les colonnes sans équivalent dans l'app (Type Tour, TKT, Remarque Garde)
     restent vides.
+
+    Périmètre : l'export doit sortir EXACTEMENT les tournées de la vue d'où il
+    part (ticket #78) — sinon il mélange les tournées de la veille et les
+    brouillons non ordonnancés. /
+    Scope: the export must return exactly the tours of the view it is launched
+    from (ticket #78).
+
+    - source=postier : date = date de LIVRAISON, comme l'onglet postier
+      (`Operations.tsx` : delivery_date + heure de départ + statut != DRAFT).
+    - source=ordonnancement : date = date de PLANIFICATION, comme l'onglet
+      ordonnancement (`TourScheduler.tsx` charge sur Tour.date). Les brouillons
+      sans heure de départ sont exclus, mais les tours non encore validés sont
+      inclus : c'est justement l'export d'avant validation.
     """
+    # Ordonnancé = une heure de départ a été posée (le contrat/moyen suit).
+    # Scheduled = a departure time has been set.
+    is_scheduled = and_(Tour.departure_time.is_not(None), Tour.departure_time != "")
+    if source == "ordonnancement":
+        scope = and_(Tour.date == date, is_scheduled)
+    else:
+        scope = and_(Tour.delivery_date == date, is_scheduled,
+                     Tour.status != TourStatus.DRAFT)
+
     query = (
         select(Tour)
-        .where(
-            Tour.base_id == base_id,
-            or_(
-                Tour.delivery_date == date,
-                and_(Tour.delivery_date.is_(None), Tour.date == date),
-            ),
-        )
+        .where(scope)
         .options(
             selectinload(Tour.stops).selectinload(TourStop.pdv),
             selectinload(Tour.base),
@@ -372,6 +392,9 @@ async def export_postier_planning(
             selectinload(Tour.tractor),
         )
     )
+    if base_id is not None:
+        query = query.where(Tour.base_id == base_id)
+
     # Périmètre région de l'utilisateur / User region scope
     region_ids = get_user_region_ids(user)
     if region_ids is not None:
@@ -405,7 +428,7 @@ async def export_postier_planning(
     ws.freeze_panes = "A7"
 
     r = 7
-    for rank, tour in enumerate(tours, start=1):
+    for tour in tours:
         base_disp = _base_disp(tour.base)
         gel = "O" if (tour.temperature_type and "GEL" in tour.temperature_type) else "N"
         trac = tour.tractor.code if tour.tractor else ""
@@ -413,7 +436,11 @@ async def export_postier_planning(
             tour.vehicle.code if tour.vehicle
             else (tour.contract.vehicle_code if tour.contract and tour.contract.vehicle_code else (tour.trailer_number or ""))
         )
-        ws.cell(r, 1, tour.priority if tour.priority is not None else rank)
+        # Ordre = priorité d'ordonnancement saisie par le planificateur (aide
+        # opérationnelle). Vide si non saisie : ne PAS y mettre un rang, qui se
+        # lirait comme une priorité (#78). / Order = planner-entered priority;
+        # left blank when unset rather than filled with a positional rank.
+        ws.cell(r, 1, tour.priority)
         ws.cell(r, 2, tour.wms_tour_code or tour.code)
         ws.cell(r, 3, tour.loader_name or "")
         ws.cell(r, 4, tour.loader_code or "")

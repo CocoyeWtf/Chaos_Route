@@ -221,11 +221,25 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       : allVolumes
   }, [allVolumes, selectedDate])
 
-  /* Base auto-détectée depuis les volumes ajoutés / Auto-detected base from added volumes */
+  /* Base auto-détectée depuis le volume RÉELLEMENT ajouté (stop.volume_id), pas
+     depuis un volume quelconque du PDV : un même PDV est servi depuis deux bases
+     le même jour (SEC → Gosselies 092, FRAIS → Villers 080), donc deviner par
+     pdv_id tombait une fois sur deux sur la mauvaise base d'origine — et la
+     base est persistée sur le tour (site de chargement, kms, contrats). Ticket
+     #84, même piège que #3/#6 pour la consommation et la température. /
+     Auto-detected base from the volume actually added (stop.volume_id): a PDV can
+     be served from two bases on the same day, so guessing by pdv_id picked the
+     wrong origin base half the time. */
   const autoBaseId = useMemo(() => {
     if (currentStops.length === 0) return null
-    const firstStopPdvId = currentStops[0].pdv_id
-    const vol = volumes.find((v) => v.pdv_id === firstStopPdvId) || allVolumes.find((v) => v.pdv_id === firstStopPdvId)
+    const first = currentStops[0]
+    const byVolume = first.volume_id != null
+      ? (volumes.find((v) => v.id === first.volume_id) ?? allVolumes.find((v) => v.id === first.volume_id))
+      : undefined
+    /* Fallback pdv_id : stops legacy enregistrés sans volume source. */
+    const vol = byVolume
+      ?? volumes.find((v) => v.pdv_id === first.pdv_id)
+      ?? allVolumes.find((v) => v.pdv_id === first.pdv_id)
     return vol?.base_origin_id ?? null
   }, [currentStops, volumes, allVolumes])
 
@@ -354,12 +368,16 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const maxCapacityWithOverbooking = capacityEqp * (1 + OVERBOOKING_PCT)
   const remaining115 = selectedVehicleType ? (maxCapacityWithOverbooking - totalEqp) : Infinity
 
-  /* Nom de la base auto-détectée / Auto-detected base name */
+  /* Nom de la base auto-détectée. Basé sur autoBaseId et NON sur effectiveBaseId :
+     tour vide = rien de détecté, il ne faut pas afficher sous un libellé « auto »
+     la base héritée du tour précédent (#84). / Based on autoBaseId, not
+     effectiveBaseId: an empty tour has nothing detected, so we must not display
+     the previous tour's leftover base as if it had been detected. */
   const autoBaseName = useMemo(() => {
-    if (!effectiveBaseId) return null
-    const b = bases.find((b) => b.id === effectiveBaseId)
+    if (!autoBaseId) return null
+    const b = bases.find((b) => b.id === autoBaseId)
     return b ? `${b.code} — ${b.name}` : null
-  }, [effectiveBaseId, bases])
+  }, [autoBaseId, bases])
 
   const handleSelectVehicleType = (vt: VehicleType, defaultCapacity: number) => {
     setSelectedVehicleType(vt)

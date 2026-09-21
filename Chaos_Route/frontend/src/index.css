@@ -14,6 +14,22 @@
   width: 256px;
 }
 
+/* Ticket #25 — la carte passait par-dessus les fenêtres modales.
+   Leaflet empile ses couches à z-index 400 et ses contrôles à 1000, et les
+   panneaux posés à côté de la carte (légende, filtres) montent à 1000 eux
+   aussi — le tout dans le contexte d'empilement de la PAGE, alors que les
+   modales de l'application vivent à 60-70. Toute fenêtre ouverte au-dessus
+   d'une carte (signalement de ticket, confirmation, MFA) passait donc derrière
+   elle, illisible et impossible à compléter.
+   On isole le bloc qui CONTIENT la carte, et non la carte seule : la légende
+   est son frère, pas son enfant. L'ordre interne des couches Leaflet (tuiles,
+   tracés, marqueurs, popups) est préservé — il devient simplement local. /
+   Isolate the block that CONTAINS the map, not the map alone: the legend is a
+   sibling. Leaflet's internal layer order is preserved, just made local. */
+:has(> .leaflet-container) {
+  isolation: isolate;
+}
+
 /* Chaos RouteManager - Dark/Light theme variables */
 :root {
   --color-primary: #f97316;

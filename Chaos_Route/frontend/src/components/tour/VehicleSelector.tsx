@@ -11,6 +11,10 @@ interface VehicleSelectorProps {
   onTemperatureSelect?: (temp: TemperatureType) => void
   suggestedTemperature?: TemperatureType
   tourTemperatures?: Set<TemperatureClass>
+  /* Gabarits refusés par un PDV déjà dans le tour → type interdit (#32).
+     La valeur est la raison affichée au survol. /
+     Vehicle types refused by a PDV already in the tour; value is the reason. */
+  blockedVehicleTypes?: Map<VehicleType, string>
 }
 
 const VEHICLE_TYPES = Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]
@@ -35,6 +39,7 @@ export function VehicleSelector({
   selectedType, onSelect,
   selectedTemperature, onTemperatureSelect,
   suggestedTemperature, tourTemperatures,
+  blockedVehicleTypes,
 }: VehicleSelectorProps) {
   const disabledMonos = tourTemperatures ? getDisabledMonoTemps(tourTemperatures) : new Set<TemperatureClass>()
   const hasSteps = !!onTemperatureSelect
@@ -104,17 +109,22 @@ export function VehicleSelector({
           {VEHICLE_TYPES.map((vt) => {
             const info = VEHICLE_TYPE_DEFAULTS[vt]
             const selected = vt === selectedType
+            /* #32 : un PDV du tour refuse ce gabarit → aucun contrat ne pourra
+               etre propose a l'ordonnancement, autant le dire ici. */
+            const blocked = blockedVehicleTypes?.get(vt)
             return (
               <button
                 key={vt}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border hover:scale-105`}
+                title={blocked ?? undefined}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border ${blocked ? 'opacity-30 cursor-not-allowed line-through' : 'hover:scale-105'}`}
                 style={{
                   backgroundColor: selected ? 'var(--color-primary)' : 'transparent',
                   borderColor: VEHICLE_COLOR,
                   color: selected ? '#fff' : 'var(--color-primary)',
                   boxShadow: selected ? '0 0 8px rgba(249,115,22,0.4)' : 'none',
                 }}
-                onClick={() => onSelect(vt, info.capacity_eqp)}
+                onClick={() => !blocked && onSelect(vt, info.capacity_eqp)}
+                disabled={!!blocked}
               >
                 {info.label}
                 <span

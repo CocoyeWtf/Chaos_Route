@@ -269,9 +269,21 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
         },
       })
       setAvailableContractsMap((prev) => ({ ...prev, [tour.id]: data }))
-      // Si aucun contrat : récupérer la raison pour ne pas laisser l'utilisateur sans explication /
-      // If no contract: fetch the reason so the user isn't left without explanation
-      if (data.length === 0) {
+      /* Récupérer la vraie raison (#32). Avant, elle n'était demandée que si la
+         liste était VIDE : quand il ne restait que des contrats de traction
+         seule (remorque CMRO), l'écran affichait « aucun contrat ne fournit
+         tracteur + remorque » alors que le vrai motif était ailleurs — gabarit
+         refusé par un PDV, ou quai sans niche interdisant le hayon rabattable.
+         On la demande donc aussi quand aucun contrat n'est éligible au presté. /
+         Fetch the real reason also when no contract qualifies for "presté",
+         not only when the list is empty. */
+      const anyPreste = data.some((c) => {
+        if (!(c.provides_tractor == null || c.provides_tractor === true)) return false
+        const supply = c.trailer_supply
+          ?? (c.provides_trailer == null ? null : c.provides_trailer ? 'CARRIER' : 'CMRO')
+        return supply == null || supply === 'CARRIER' || supply === 'BOTH'
+      })
+      if (data.length === 0 || !anyPreste) {
         try {
           const { data: reasons } = await api.get<string[]>(`/tours/${tour.id}/contract-blockers`, {
             params: {
@@ -1838,11 +1850,11 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                               Reason when no contract available */}
                           {(input.mode === 'preste' || input.mode === 'mixte') && contracts.length === 0 && (
                             <div className="text-[10px] leading-tight max-w-[280px]" style={{ color: 'var(--color-danger)' }}>
-                              {(availableContractsMap[tour.id]?.length ?? 0) === 0
-                                ? ((contractBlockersMap[tour.id]?.length ?? 0) > 0
-                                    ? <>Aucun contrat : {contractBlockersMap[tour.id].join(' ; ')}</>
-                                    : <>Aucun contrat compatible (type véhicule / température / disponibilité).</>)
-                                : <>Aucun contrat ne fournit {input.mode === 'preste' ? 'tracteur + remorque' : 'le tracteur'} pour ce mode.</>}
+                              {(contractBlockersMap[tour.id]?.length ?? 0) > 0
+                                ? <>Aucun contrat : {contractBlockersMap[tour.id].join(' ; ')}</>
+                                : (availableContractsMap[tour.id]?.length ?? 0) === 0
+                                  ? <>Aucun contrat compatible (type véhicule / température / disponibilité).</>
+                                  : <>Aucun contrat ne fournit {input.mode === 'preste' ? 'tracteur + remorque' : 'le tracteur'} pour ce mode.</>}
                             </div>
                           )}
 

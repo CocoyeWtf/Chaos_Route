@@ -343,11 +343,20 @@ async def _log_audit(
 
 
 async def _check_vehicle_type_compatibility(
-    db: AsyncSession, stops_data: list[dict], contract: Contract
+    db: AsyncSession, stops_data: list[dict], contract: Contract,
+    tour_vehicle_type: str | None = None,
 ) -> list[str]:
     """Vérifier compatibilité type véhicule entre les PDV et le contrat /
     Check vehicle type compatibility between PDVs and the contract.
     Returns list of violation messages (empty = OK).
+
+    #32 : un quart des contrats n'a pas de type de véhicule (contrats de
+    traction seule, la remorque étant CMRO). Ils échappaient donc totalement au
+    contrôle : on pouvait planifier en mixte un semi CMRO chez un PDV qui
+    n'accepte pas le semi. Ce qui se présente au point de vente, c'est le
+    gabarit du TOUR — on l'utilise quand le contrat n'en impose pas. /
+    Contracts without a vehicle type (traction-only, CMRO trailer) used to skip
+    this check entirely; fall back to the tour's own vehicle type.
     """
     pdv_ids = [s["pdv_id"] for s in stops_data]
     if not pdv_ids:
@@ -357,6 +366,11 @@ async def _check_vehicle_type_compatibility(
 
     vt = contract.vehicle_type
     vt_value = vt.value if (vt and hasattr(vt, 'value')) else vt
+    if not vt_value:
+        vt_value = (
+            tour_vehicle_type.value if hasattr(tour_vehicle_type, 'value')
+            else tour_vehicle_type
+        )
 
     violations: list[str] = []
     for stop in stops_data:
@@ -532,7 +546,9 @@ async def available_contracts_for_tours(
             compatible = []
             for c in available:
                 dock_violations = await _check_dock_tailgate_compatibility(db, stops_data, c)
-                vt_violations = await _check_vehicle_type_compatibility(db, stops_data, c)
+                vt_violations = await _check_vehicle_type_compatibility(
+                    db, stops_data, c, vehicle_type or tour.vehicle_type
+                )
                 if not dock_violations and not vt_violations:
                     compatible.append(c)
             available = compatible
@@ -622,7 +638,9 @@ async def contract_blockers(
     ]
     codes: set[str] = set()
     for c in pool:
-        for v in await _check_vehicle_type_compatibility(db, stops_data, c):
+        for v in await _check_vehicle_type_compatibility(
+            db, stops_data, c, vehicle_type or tour.vehicle_type
+        ):
             codes.add(v)
         for v in await _check_dock_tailgate_compatibility(db, stops_data, c):
             codes.add(v)
@@ -1797,7 +1815,9 @@ async def create_tour(
 
     # Vérification compatibilité type véhicule / Vehicle type compatibility check
     if contract and stops_input:
-        vt_violations = await _check_vehicle_type_compatibility(db, stops_input, contract)
+        vt_violations = await _check_vehicle_type_compatibility(
+            db, stops_input, contract, data.vehicle_type
+        )
         if vt_violations:
             raise HTTPException(
                 status_code=422,
@@ -2185,7 +2205,9 @@ async def schedule_tour(
             dock_violations = await _check_dock_tailgate_compatibility(db, stops_data, vehicle_props)  # type: ignore[arg-type]
             if dock_violations:
                 raise HTTPException(status_code=422, detail=f"DOCK_TAILGATE:{' | '.join(dock_violations)}")
-            vt_violations = await _check_vehicle_type_compatibility(db, stops_data, vehicle_props)  # type: ignore[arg-type]
+            vt_violations = await _check_vehicle_type_compatibility(
+                db, stops_data, vehicle_props, tour.vehicle_type,  # type: ignore[arg-type]
+            )
             if vt_violations:
                 raise HTTPException(status_code=422, detail=f"VEHICLE_TYPE:{' | '.join(vt_violations)}")
 

@@ -335,6 +335,39 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
 
   const pdvMap = useMemo(() => new Map(pdvs.map((p) => [p.id, p])), [pdvs])
 
+  /* Gabarits refusés par un PDV déjà dans le tour (#32). Un PDV peut n'accepter
+     qu'une partie des types (« 13151 Bruxelles Monnaie Mint : porteur surbaissé
+     uniquement »). Jusqu'ici rien ne le disait à la construction : le tour se
+     montait en semi, puis l'ordonnancement ne proposait plus aucun contrat, avec
+     un message parlant de remorque. On le signale ici, à la source. /
+     Vehicle types refused by a PDV already in the tour: surfaced at build time
+     instead of silently emptying the contract list at scheduling. */
+  const blockedVehicleTypes = useMemo(() => {
+    const blocked = new Map<VehicleType, string>()
+    for (const stop of currentStops) {
+      const pdv = pdvMap.get(stop.pdv_id)
+      if (!pdv?.allowed_vehicle_types) continue
+      const allowed = new Set(pdv.allowed_vehicle_types.split('|').filter(Boolean))
+      if (allowed.size === 0) continue
+      for (const vt of Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]) {
+        if (allowed.has(vt) || blocked.has(vt)) continue
+        blocked.set(vt, `${pdv.code} — ${pdv.name} n'accepte pas ce gabarit (${[...allowed].map((a) => VEHICLE_TYPE_DEFAULTS[a as VehicleType]?.label ?? a).join(', ')})`)
+      }
+    }
+    return blocked
+  }, [currentStops, pdvMap])
+
+  /* Le gabarit déjà choisi devient interdit parce qu'on vient d'ajouter un PDV
+     plus restrictif : on ne retire rien du tour, on avertit. / The chosen type
+     became forbidden by a PDV added afterwards: warn, don't undo. */
+  const vehicleTypeConflict = selectedVehicleType ? blockedVehicleTypes.get(selectedVehicleType) ?? null : null
+
+  /* Deux PDV aux gabarits incompatibles entre eux : plus aucun véhicule n'est
+     sélectionnable. Sans message, l'écran semblerait cassé. / No common vehicle
+     type between the tour's PDVs: say it instead of greying everything out. */
+  const noCommonVehicleType = currentStops.length > 0
+    && blockedVehicleTypes.size >= (Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]).length
+
   /* Dernier stop pour tri par proximité / Last stop for proximity sorting */
   const lastStopPdvId = useMemo(() => {
     if (currentStops.length === 0) return null
@@ -927,6 +960,26 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
     setSurpriseDepartureTime('')
   }
 
+  /* Alerte gabarit refusé par un PDV du tour (#32) / Vehicle type refused by a PDV */
+  const vehicleTypeWarning = noCommonVehicleType ? (
+    <div
+      className="rounded-lg border px-3 py-2 text-xs"
+      style={{ borderColor: 'var(--color-danger)', backgroundColor: 'rgba(239,68,68,0.08)', color: 'var(--color-danger)' }}
+    >
+      <strong>Aucun gabarit commun à ces points de vente.</strong> Chaque type de véhicule est
+      refusé par au moins un point de vente du tour : il faut les répartir sur deux tours.
+    </div>
+  ) : vehicleTypeConflict ? (
+    <div
+      className="rounded-lg border px-3 py-2 text-xs"
+      style={{ borderColor: 'var(--color-danger)', backgroundColor: 'rgba(239,68,68,0.08)', color: 'var(--color-danger)' }}
+    >
+      <strong>Gabarit refusé par un point de vente du tour.</strong> {vehicleTypeConflict}.
+      Aucun contrat ne pourra être proposé à l'ordonnancement tant que ce point de vente et ce
+      type de véhicule sont ensemble : changez de véhicule, ou sortez ce point de vente du tour.
+    </div>
+  ) : null
+
   /* Bandeau véhicule inline / Inline vehicle banner — shown after first stop, before vehicle selection */
   const vehicleBanner = currentStops.length > 0 && !selectedVehicleType ? (
     <div
@@ -948,6 +1001,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
         onTemperatureSelect={tourMode === 'pickup' ? undefined : setSelectedTemperatureType}
         suggestedTemperature={tourMode === 'pickup' ? undefined : suggestedTemperature}
         tourTemperatures={tourMode === 'pickup' ? undefined : tourTemperatures}
+        blockedVehicleTypes={blockedVehicleTypes}
       />
     </div>
   ) : null
@@ -1459,6 +1513,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                   <Panel defaultSize={50} minSize={25}>
                     <div className="flex flex-col h-full gap-2 overflow-y-auto">
                       {vehicleBanner}
+                      {vehicleTypeWarning}
                       <div className="flex-1 min-h-0 overflow-y-auto">
                         <TourSummary
                           stops={currentStops}
@@ -1585,6 +1640,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                       <Panel defaultSize={50} minSize={25}>
                         <div className="flex flex-col h-full gap-2 overflow-y-auto">
                           {vehicleBanner}
+                      {vehicleTypeWarning}
                           <div className="flex-1 min-h-0 overflow-y-auto">
                             <TourSummary
                               stops={currentStops}
@@ -1672,6 +1728,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
             />
           )}
           {vehicleBanner}
+                      {vehicleTypeWarning}
           <TourSummary
             stops={currentStops}
             pdvs={pdvs}

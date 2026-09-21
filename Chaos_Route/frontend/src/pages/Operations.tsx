@@ -55,6 +55,9 @@ const ALL_COLUMNS: OpsCol[] = [
   { key: 'priority', label: 'tourPlanning.priority', defaultWidth: 50, align: 'center' },
   { key: 'stops', label: 'tourPlanning.stops', defaultWidth: 55, align: 'center' },
   { key: 'eqc', label: 'EQC', defaultWidth: 55, align: 'center' },
+  // Heure à laquelle la semi est disponible au chargement, saisie par le postier
+  // dans la tournée (#44) : elle n'était lisible qu'en dépliant la tournée.
+  { key: 'trailer_ready', label: 'Dispo semi', defaultWidth: 105, align: 'center' },
   { key: 'delay', label: 'operations.delay', defaultWidth: 75, align: 'center' },
   { key: 'exit', label: 'operations.barrierExit', defaultWidth: 60, align: 'center' },
 ]
@@ -243,12 +246,24 @@ export default function Operations() {
     if (!silent) setLoading(true)
     try {
       const params: Record<string, unknown> = { delivery_date: date, base_id: baseId }
-      const [toursRes, volRes] = await Promise.all([
-        api.get<Tour[]>('/tours/', { params }),
-        api.get<Volume[]>('/volumes/', { params: { base_origin_id: baseId } }),
-      ])
+      const toursRes = await api.get<Tour[]>('/tours/', { params })
       const data = toursRes.data
-      setVolumes(volRes.data)
+
+      /* Les volumes étaient chargés sans aucun filtre de date : la requête
+         héritait du plafond serveur de 500 lignes prises au hasard de
+         l'historique de la base (15 000 lignes en production). Les températures
+         et les dates de répartition affichées par arrêt pouvaient donc être
+         muettes, et les EQC encore disponibles (#54) faux. On ne charge que les
+         journées de répartition réellement concernées par les tournées
+         affichées — une ou deux en pratique. / The volumes query had no date
+         filter and silently inherited the server's 500-row cap. */
+      const journees = [...new Set(data.map((t) => t.date).filter(Boolean))]
+      const volPages = await Promise.all(
+        journees.map((d) => api.get<Volume[]>('/volumes/', {
+          params: { base_origin_id: baseId, dispatch_date: d, limit: 5000 },
+        })),
+      )
+      setVolumes(volPages.flatMap((r) => r.data))
       // Postier : ne montrer que les tours validés (planifiés non validés = en attente au transport)
       const scheduled = data.filter((t) => t.departure_time && t.status !== 'DRAFT')
       setTours(scheduled)
@@ -901,7 +916,12 @@ function EditableEqc({ value, onSave }: { value: number; onSave: (v: number) => 
 }
 
 /* Mini-composant pour ajouter un PDV dans un tour / Inline add-stop widget */
-function AddStopInline({ pdvs, tourStopPdvIds, onAdd }: { pdvs: PDV[]; tourStopPdvIds: Set<number>; onAdd: (pdvId: number, eqpCount: number) => void }) {
+function AddStopInline({ pdvs, tourStopPdvIds, availableEqcByPdv, onAdd }: {
+  pdvs: PDV[]
+  tourStopPdvIds: Set<number>
+  availableEqcByPdv: Map<number, number>
+  onAdd: (pdvId: number, eqpCount: number) => void
+}) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [selectedPdv, setSelectedPdv] = useState<PDV | null>(null)
@@ -922,9 +942,15 @@ function AddStopInline({ pdvs, tourStopPdvIds, onAdd }: { pdvs: PDV[]; tourStopP
   }
 
   if (selectedPdv) {
+    const dispo = availableEqcByPdv.get(selectedPdv.id) ?? 0
     return (
       <div className="flex items-center gap-2 mb-2 p-2 rounded-lg border" style={{ borderColor: 'var(--color-primary)', backgroundColor: 'rgba(249,115,22,0.05)' }} onClick={(e) => e.stopPropagation()}>
         <span className="text-xs font-semibold" style={{ color: 'var(--color-primary)' }}>{selectedPdv.code} — {selectedPdv.name}</span>
+        {dispo > 0 && (
+          <span className="text-[10px]" style={{ color: 'var(--color-success)' }}>
+            {Math.round(dispo * 100) / 100} EQC disponibles ce jour
+          </span>
+        )}
         <input
           type="number"
           min={0}
@@ -949,7 +975,13 @@ function AddStopInline({ pdvs, tourStopPdvIds, onAdd }: { pdvs: PDV[]; tourStopP
   }
 
   const q = search.toLowerCase()
-  const filtered = pdvs.filter((p) => !tourStopPdvIds.has(p.id) && p.latitude && p.longitude && (p.code.toLowerCase().includes(q) || (p.name ?? '').toLowerCase().includes(q) || (p.city ?? '').toLowerCase().includes(q))).slice(0, 15)
+  /* Les points de vente qui ont encore des volumes non attribués remontent en
+     tête : c'est ce que le postier cherche en priorité (#54). */
+  const filtered = pdvs
+    .filter((p) => !tourStopPdvIds.has(p.id) && p.latitude && p.longitude
+      && (p.code.toLowerCase().includes(q) || (p.name ?? '').toLowerCase().includes(q) || (p.city ?? '').toLowerCase().includes(q)))
+    .sort((a, b) => (availableEqcByPdv.get(b.id) ?? 0) - (availableEqcByPdv.get(a.id) ?? 0))
+    .slice(0, 15)
   return (
     <div className="flex items-center gap-2 mb-2" onClick={(e) => e.stopPropagation()}>
       <input
@@ -968,9 +1000,18 @@ function AddStopInline({ pdvs, tourStopPdvIds, onAdd }: { pdvs: PDV[]; tourStopP
               key={p.id}
               className="text-[10px] px-2 py-1 rounded border font-semibold whitespace-nowrap transition-all hover:opacity-80"
               style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
-              onClick={() => setSelectedPdv(p)}
+              onClick={() => {
+                setSelectedPdv(p)
+                const dispo = availableEqcByPdv.get(p.id) ?? 0
+                if (dispo > 0) setEqpCount(String(Math.round(dispo * 100) / 100))
+              }}
             >
               {p.code} — {p.name}
+              {(availableEqcByPdv.get(p.id) ?? 0) > 0 && (
+                <span className="ml-1" style={{ color: 'var(--color-success)' }}>
+                  · {Math.round((availableEqcByPdv.get(p.id) ?? 0) * 100) / 100} EQC
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -1035,6 +1076,23 @@ function TourRow({
 
   const orderedStops = [...tour.estimated_stops].sort((a, b) => a.sequence_order - b.sequence_order)
 
+  /* EQC encore disponibles par point de vente pour la journée de cette tournée
+     (#54). Le postier doit pouvoir piocher dans les volumes non attribués —
+     navette paramétrée trop tard, volume supplémentaire, post-facturation — et
+     non plus seulement taper un nombre au clavier. Le rattachement lui-même est
+     déjà fait par le serveur à l'ajout du point de vente. /
+     Unassigned EQC per PDV for this tour's day, so the postier can pick from
+     what is actually available instead of typing a number blind. */
+  const availableEqcByPdv = useMemo(() => {
+    const m = new Map<number, number>()
+    for (const v of volumes) {
+      if (v.tour_id) continue
+      if (v.dispatch_date !== tour.date) continue
+      m.set(v.pdv_id, (m.get(v.pdv_id) ?? 0) + Number(v.eqp_count || 0))
+    }
+    return m
+  }, [volumes, tour.date])
+
   /* Reste à quai en cours de saisie (#68) / RAQ being declared */
   const [raqStop, setRaqStop] = useState<{ id: number; pdvCode: string; max: number } | null>(null)
 
@@ -1090,6 +1148,11 @@ function TourRow({
     priority: <span className="font-semibold" style={{ color: tour.priority != null ? 'var(--color-primary)' : 'var(--text-muted)' }}>{tour.priority ?? '—'}</span>,
     stops: <>{tour.stops.length}</>,
     eqc: <>{eqc}</>,
+    trailer_ready: (
+      <span className="font-mono text-xs" style={{ color: tour.trailer_ready_time ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+        {displayDateTime(tour.trailer_ready_time)}
+      </span>
+    ),
     delay: <DelayBadge delay={tour.delay_minutes} color={color} t={t} />,
     exit: <span className="font-mono text-xs" style={{ color: tour.barrier_exit_time ? 'var(--text-primary)' : 'var(--text-muted)' }}>{displayDateTime(tour.barrier_exit_time)}</span>,
   }
@@ -1300,7 +1363,12 @@ function TourRow({
             {/* Ajouter un PDV / supprimer la tournée / Add PDV, delete tour */}
             <div className="flex items-center gap-2">
               {stopsEditable && (
-                <AddStopInline pdvs={pdvs} tourStopPdvIds={new Set(tour.stops.map((s) => s.pdv_id))} onAdd={(pdvId, eqpCount) => onAddStop(tour.id, pdvId, eqpCount)} />
+                <AddStopInline
+                  pdvs={pdvs}
+                  tourStopPdvIds={new Set(tour.stops.map((s) => s.pdv_id))}
+                  availableEqcByPdv={availableEqcByPdv}
+                  onAdd={(pdvId, eqpCount) => onAddStop(tour.id, pdvId, eqpCount)}
+                />
               )}
               {/* Supprimer la tournée (#37) : sans ce bouton, retirer les PDV un
                   par un butait sur le dernier et les volumes restaient bloqués. */}
@@ -1388,10 +1456,19 @@ function TourRow({
                   placeholder="°C" onClick={(e) => e.stopPropagation()} />
               </div>
               <div className="min-w-0">
-                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>EQC</label>
-                <input type="number" value={form.eqp_loaded} readOnly
+                {/* EQC réellement chargés (#47). Le champ était en lecture seule,
+                    alimenté par le seul import WMS : quand le chargement ne
+                    correspondait pas, le postier n'avait aucun moyen de corriger.
+                    L'import continue de le pré-remplir, la saisie prime ensuite. /
+                    Final loaded EQC: was read-only and WMS-fed only. */}
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>EQC chargés</label>
+                <input
+                  type="number" min={0} step={1}
+                  value={form.eqp_loaded}
+                  onChange={(e) => onFormChange('eqp_loaded', e.target.value)}
                   className="w-full min-w-0 px-1.5 py-1.5 rounded border text-xs"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}
+                  style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  title="Nombre d'EQC réellement chargés — pré-rempli par l'import WMS, corrigeable. Nombre entier."
                   onClick={(e) => e.stopPropagation()} />
               </div>
             </div>

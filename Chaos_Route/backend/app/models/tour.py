@@ -86,7 +86,12 @@ class Tour(Base, TenantMixin):
     bypass_support_rules: Mapped[bool] = mapped_column(Boolean, default=False)  # Desactive le controle support/base pour cette tournee
     # Priorité manuelle d'ordonnancement (1..n) saisie au moment de planifier ;
     # départage les tours à même heure de départ. NULL = non prioritaire (en dernier).
-    priority: Mapped[int | None] = mapped_column(Integer)
+    # Priorité d'ordonnancement, DÉCIMALE (#29) : l'agent trafic intercale une
+    # tournée entre la 2 et la 3 en saisissant 2,5, sans renuméroter les autres.
+    # La colonne était un entier ; elle a été élargie en numeric(8,2) par une
+    # migration manuelle (la migration de démarrage n'altère pas les types).
+    # / Decimal scheduling priority so a tour can be slotted between two others.
+    priority: Mapped[float | None] = mapped_column(Numeric(8, 2))
 
     # Champs opérationnels / Operational fields — datetime-local YYYY-MM-DDTHH:MM
     driver_name: Mapped[str | None] = mapped_column(String(100))

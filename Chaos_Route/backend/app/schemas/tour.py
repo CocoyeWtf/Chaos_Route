@@ -92,7 +92,7 @@ class TourBase(BaseModel):
     destination: str | None = None            # destination libre (garage, base cible…)
     supplier_id: int | None = None            # fournisseur cible (enlèvement dédié)
     bypass_support_rules: bool = False
-    priority: int | None = None  # Priorité manuelle d'ordonnancement (1..n)
+    priority: float | None = None  # Priorité manuelle d'ordonnancement, décimale (#29)
     driver_name: str | None = None
     driver_code_infolog: str | None = None  # Code chauffeur Infolog (export WMS)
     driver_arrival_time: str | None = None
@@ -145,7 +145,7 @@ class TourUpdate(BaseModel):
     destination: str | None = None
     supplier_id: int | None = None
     bypass_support_rules: bool | None = None
-    priority: int | None = None
+    priority: float | None = None
     driver_name: str | None = None
     driver_arrival_time: str | None = None
     loading_end_time: str | None = None
@@ -213,7 +213,7 @@ class TourSchedule(BaseModel):
     delivery_date: str | None = None        # YYYY-MM-DD
     driver_name: str | None = None          # propre : chauffeur base
     driver_code_infolog: str | None = None  # code Infolog du chauffeur (export WMS)
-    priority: int | None = None             # priorité manuelle d'ordonnancement (1..n)
+    priority: float | None = None           # priorité manuelle d'ordonnancement, décimale (#29)
 
     @model_validator(mode="after")
     def check_assignment(self) -> "TourSchedule":

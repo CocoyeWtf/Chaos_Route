@@ -443,7 +443,9 @@ async def export_postier_planning(
         # opérationnelle). Vide si non saisie : ne PAS y mettre un rang, qui se
         # lirait comme une priorité (#78). / Order = planner-entered priority;
         # left blank when unset rather than filled with a positional rank.
-        ws.cell(r, 1, tour.priority)
+        # float() : la priorité est numeric en base (#29), openpyxl écrit un
+        # nombre et non une chaîne. / Cast Decimal to float for openpyxl.
+        ws.cell(r, 1, float(tour.priority) if tour.priority is not None else None)
         ws.cell(r, 2, tour.wms_tour_code or tour.code)
         ws.cell(r, 3, tour.loader_name or "")
         ws.cell(r, 4, tour.loader_code or "")

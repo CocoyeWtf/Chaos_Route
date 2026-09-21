@@ -74,7 +74,20 @@ export default function TourHistory() {
       render: (row) => (row.tour_type && row.tour_type !== 'LIVRAISON' ? TOUR_TYPE_LABELS[row.tour_type] : 'Livraison'),
       filterValue: (row) => (row.tour_type && row.tour_type !== 'LIVRAISON' ? TOUR_TYPE_LABELS[row.tour_type] : 'Livraison'),
     },
-    { key: 'date', label: t('common.date'), width: '110px', filterable: true, render: (row) => formatDate(row.date) },
+    /* Deux dates, et elles ne disent pas la même chose (#56) : `date` est la date
+       de RÉPARTITION (le jour où la tournée est planifiée), `delivery_date` est
+       le jour où elle roule. La colonne s'appelait « Date » tout court, ce qui
+       laissait croire à la date du tour. / Two distinct dates: dispatch vs delivery. */
+    {
+      key: 'date', label: 'Date de répartition', width: '130px', filterable: true,
+      render: (row) => formatDate(row.date),
+      filterValue: (row) => formatDate(row.date),
+    },
+    {
+      key: 'delivery_date' as keyof Tour, label: 'Date du tour', width: '120px', filterable: true,
+      render: (row) => row.delivery_date ? formatDate(row.delivery_date) : '—',
+      filterValue: (row) => row.delivery_date ? formatDate(row.delivery_date) : '',
+    },
     {
       key: 'base_id',
       label: t('tourHistory.base'),

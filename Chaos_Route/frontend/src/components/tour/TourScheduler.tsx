@@ -2161,10 +2161,10 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                           {/* Priorité manuelle (départage les départs à même heure) */}
                           <input
                             type="number"
-                            min={1}
-                            step={1}
+                            min={0.1}
+                            step={0.5}
                             placeholder="Prio"
-                            title="Priorité (1 = le plus prioritaire)"
+                            title="Priorité (1 = le plus prioritaire). Décimales acceptées : 2,5 intercale entre 2 et 3."
                             value={input.priority ?? ''}
                             onChange={(e) => updateInput(tour.id, 'priority', e.target.value ? Number(e.target.value) : null)}
                             onClick={(e) => e.stopPropagation()}

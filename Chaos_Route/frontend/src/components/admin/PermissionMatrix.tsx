@@ -40,6 +40,9 @@ const RESOURCE_GROUPS: ResourceGroup[] = [
   {
     key: 'transport', label: 'Transport', icon: '🚛',
     resources: [
+      // Prix carburant (#24) : à sa place ici, et non dans l'administration —
+      // c'est une donnée d'exploitation que le trafic doit pouvoir tenir seul.
+      { resource: 'fuel-prices', label: 'Prix carburant' },
       { resource: 'contracts', label: 'Contrats' },
       { resource: 'volumes', label: 'Volumes' },
       { resource: 'tour-planning', label: 'Planning tournees' },
@@ -104,7 +107,7 @@ const RESOURCE_GROUPS: ResourceGroup[] = [
     resources: [
       { resource: 'users', label: 'Utilisateurs' },
       { resource: 'roles', label: 'Roles' },
-      { resource: 'parameters', label: 'Parametres / Prix carburant / Audit' },
+      { resource: 'parameters', label: 'Parametres / Audit' },
       { resource: 'imports-exports', label: 'Imports / Exports' },
     ],
   },

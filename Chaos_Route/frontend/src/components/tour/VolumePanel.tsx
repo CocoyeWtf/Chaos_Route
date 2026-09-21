@@ -33,6 +33,10 @@ interface VolumePanelProps {
   pdvs: PDV[]
   consumedVolumeIds: Set<number>
   onAddVolume: (volume: Volume) => void
+  /* Découper un volume à la demande (#35), sans attendre un dépassement de
+     capacité : certains camions partent avec deux volumes scindés. /
+     Split a volume on demand, not only on capacity overflow. */
+  onSplitVolume?: (volume: Volume) => void
   vehicleCapacity: number
   currentEqp: number
   /* Pour le tri par proximité / For proximity sorting */
@@ -50,7 +54,7 @@ interface VolumePanelProps {
 }
 
 export function VolumePanel({
-  volumes, pdvs, consumedVolumeIds, onAddVolume, vehicleCapacity, currentEqp,
+  volumes, pdvs, consumedVolumeIds, onAddVolume, onSplitVolume, vehicleCapacity, currentEqp,
   lastStopPdvId, baseId, distanceIndex, pickupSummaries, tempFilters, onTempFiltersChange,
   baseFilters, onBaseFiltersChange, availableBases,
 }: VolumePanelProps) {
@@ -276,6 +280,20 @@ export function VolumePanel({
                   >
                     RAQ
                   </span>
+                )}
+                {/* Découper (#35) : le seul moyen était le clic droit sur la
+                    pastille de carte, et la part était plafonnée par la capacité
+                    restante. Ici, le volume entier est découpable à volonté. */}
+                {!consumed && onSplitVolume && vol.eqp_count > 0.5 && (
+                  <button
+                    type="button"
+                    className="px-1.5 py-0.5 rounded border text-[10px] font-semibold transition-all hover:opacity-80"
+                    style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+                    title="Découper ce volume en deux parts"
+                    onClick={(e) => { e.stopPropagation(); onSplitVolume(vol) }}
+                  >
+                    Découper
+                  </button>
                 )}
                 {vol.weight_kg && <span>{vol.weight_kg} kg</span>}
                 {dist != null && (

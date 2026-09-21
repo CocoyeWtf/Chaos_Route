@@ -728,6 +728,16 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
     handleAddVolume(vol)
   }, [tourMode, filteredVolumes, consumedVolumeIds])
 
+  /* Découpage demandé depuis la liste des volumes (#35). Contrairement au clic
+     droit sur la carte, la part n'est PAS plafonnée par la capacité restante :
+     l'AT prépare ses deux parts avant même d'avoir choisi le véhicule. /
+     Split requested from the volume list: no capacity cap. */
+  const handleSplitFromList = useCallback((vol: Volume) => {
+    if (consumedVolumeIds.has(vol.id)) return
+    setSplitDialog({ volume: vol, maxEqp: vol.eqp_count })
+    setSplitEqp(Math.max(Math.round((vol.eqp_count / 2) * 100) / 100, 0.5))
+  }, [consumedVolumeIds])
+
   /* Clic droit sur pastille carte → ouvrir le dialogue de découpage /
      Right-click on map marker → open split dialog */
   const handlePdvContextMenu = useCallback((pdv: PDV) => {
@@ -1414,16 +1424,42 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
           </div>
         )}
 
-        {/* Type de véhicule sélectionné / Selected vehicle type */}
+        {/* Type de véhicule — MODIFIABLE (#38). Il n'était affiché qu'en texte :
+            se tromper de gabarit obligeait à réinitialiser tout le tour. Le
+            changement repasse par la même logique que la sélection initiale, qui
+            propose un découpage si la nouvelle capacité ne suffit plus. Les
+            gabarits refusés par un PDV du tour restent indisponibles (#32). /
+            Vehicle type is now editable: picking the wrong one no longer forces
+            a full reset of the tour. */}
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
             {t('tourPlanning.vehicleType')}
           </label>
-          <span className="text-sm font-semibold px-3 py-2" style={{ color: selectedVehicleType ? 'var(--color-primary)' : 'var(--text-muted)' }}>
-            {selectedVehicleType
-              ? `${VEHICLE_TYPE_DEFAULTS[selectedVehicleType].label} (${capacityEqp} EQC)`
-              : t('tourPlanning.selectVehicleType')}
-          </span>
+          <select
+            className="text-sm font-semibold px-2 py-2 rounded-lg border"
+            style={{
+              backgroundColor: 'var(--bg-primary)',
+              borderColor: 'var(--border-color)',
+              color: selectedVehicleType ? 'var(--color-primary)' : 'var(--text-muted)',
+            }}
+            value={selectedVehicleType ?? ''}
+            onChange={(e) => {
+              const vt = e.target.value as VehicleType
+              if (!vt) return
+              handleSelectVehicleType(vt, VEHICLE_TYPE_DEFAULTS[vt].capacity_eqp)
+            }}
+          >
+            {!selectedVehicleType && <option value="">{t('tourPlanning.selectVehicleType')}</option>}
+            {(Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]).map((vt) => {
+              const blocked = blockedVehicleTypes.get(vt)
+              return (
+                <option key={vt} value={vt} disabled={!!blocked} title={blocked}>
+                  {VEHICLE_TYPE_DEFAULTS[vt].label} ({vt === selectedVehicleType ? capacityEqp : VEHICLE_TYPE_DEFAULTS[vt].capacity_eqp} EQC)
+                  {blocked ? ' — refusé par un PDV du tour' : ''}
+                </option>
+              )
+            })}
+          </select>
         </div>
 
         {/* Badge température / Temperature badge */}
@@ -1510,6 +1546,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                           pdvs={pdvs}
                           consumedVolumeIds={consumedVolumeIds}
                           onAddVolume={handleAddVolume}
+                          onSplitVolume={handleSplitFromList}
                           vehicleCapacity={capacityEqp}
                           currentEqp={totalEqp}
                           lastStopPdvId={lastStopPdvId}
@@ -1636,6 +1673,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                               pdvs={pdvs}
                               consumedVolumeIds={consumedVolumeIds}
                               onAddVolume={handleAddVolume}
+                          onSplitVolume={handleSplitFromList}
                               vehicleCapacity={capacityEqp}
                               currentEqp={totalEqp}
                               lastStopPdvId={lastStopPdvId}
@@ -1732,6 +1770,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
               pdvs={pdvs}
               consumedVolumeIds={consumedVolumeIds}
               onAddVolume={handleAddVolume}
+                          onSplitVolume={handleSplitFromList}
               vehicleCapacity={capacityEqp}
               currentEqp={totalEqp}
               lastStopPdvId={lastStopPdvId}

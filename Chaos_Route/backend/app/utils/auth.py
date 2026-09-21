@@ -25,6 +25,11 @@ RESOURCES = [
     "distances",
     "base-activities",
     "parameters",
+    # Prix carburant : ressource à part (#24). Elle relevait de « parameters »,
+    # qui ouvre aussi les paramètres généraux ET le journal d'audit : donner
+    # l'accès aux prix du carburant à un rôle d'exploitation lui donnait bien
+    # plus que demandé. / Fuel prices: own resource, was lumped with settings.
+    "fuel-prices",
     "tour-planning",
     "tour-history",
     "operations",

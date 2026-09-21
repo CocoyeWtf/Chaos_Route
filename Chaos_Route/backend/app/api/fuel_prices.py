@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/", response_model=list[FuelPriceRead])
 async def list_fuel_prices(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("parameters", "read")),
+    user: User = Depends(require_permission("fuel-prices", "read")),
 ):
     """Lister les prix du gasoil triés par date début DESC / List fuel prices sorted by start_date DESC."""
     result = await db.execute(select(FuelPrice).order_by(FuelPrice.start_date.desc()))
@@ -27,7 +27,7 @@ async def list_fuel_prices(
 async def create_fuel_price(
     data: FuelPriceCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("parameters", "create")),
+    user: User = Depends(require_permission("fuel-prices", "create")),
 ):
     """Créer un prix du gasoil / Create a fuel price entry."""
     entry = FuelPrice(**data.model_dump())
@@ -42,7 +42,7 @@ async def update_fuel_price(
     entry_id: int,
     data: FuelPriceUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("parameters", "update")),
+    user: User = Depends(require_permission("fuel-prices", "update")),
 ):
     """Modifier un prix du gasoil / Update a fuel price entry."""
     entry = await db.get(FuelPrice, entry_id)
@@ -59,7 +59,7 @@ async def update_fuel_price(
 async def delete_fuel_price(
     entry_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("parameters", "delete")),
+    user: User = Depends(require_permission("fuel-prices", "delete")),
 ):
     """Supprimer un prix du gasoil / Delete a fuel price entry."""
     entry = await db.get(FuelPrice, entry_id)

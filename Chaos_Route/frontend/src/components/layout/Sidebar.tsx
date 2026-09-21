@@ -64,7 +64,7 @@ const navGroups: NavGroup[] = [
     children: [
       { path: '/contracts', label: 'nav.contracts', icon: '📝', resource: 'contracts' },
       { path: '/volumes', label: 'nav.volumes', icon: '📋', resource: 'volumes' },
-      { path: '/fuel-prices', label: 'nav.fuelPrices', icon: '⛽', resource: 'parameters' },
+      { path: '/fuel-prices', label: 'nav.fuelPrices', icon: '⛽', resource: 'fuel-prices' },
       { path: '/tour-planning', label: 'nav.tourPlanning', icon: '🗺️', resource: 'tour-planning' },
       { path: '/tour-history', label: 'nav.tourHistory', icon: '📜', resource: 'tour-history' },
       { path: '/transporter-summary', label: 'nav.transporterSummary', icon: '🧾', resource: 'tour-history' },

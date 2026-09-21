@@ -7,7 +7,12 @@ import type { PDV, PdvPickupSummary, TemperatureClass } from '../../types'
 import { TEMPERATURE_COLORS } from '../../types'
 
 /* Statut volume du PDV / PDV volume status */
-export type PdvVolumeStatus = 'none' | 'unassigned' | 'assigned'
+/* « raq » = le point de vente a de la marchandise restée à quai, non encore
+   replanifiée (#68). C'est un cas particulier de « unassigned » : le volume est
+   disponible, mais il vient d'une tournée où il n'est pas parti — l'AT doit le
+   voir au premier coup d'œil pour le replacer en priorité. /
+   "raq" is a special case of "unassigned": available, but left over from a tour. */
+export type PdvVolumeStatus = 'none' | 'unassigned' | 'raq' | 'assigned'
 
 /* Labels courts par type de reprise / Short labels per pickup type */
 const PICKUP_TYPE_SHORT: Record<string, string> = {
@@ -156,7 +161,8 @@ export function PdvMarker({ pdv, onClick, onTempClick, onContextMenu, selected, 
     ? '#f97316'
     : tempKeys.length === 1
       ? TEMPERATURE_COLORS[tempKeys[0]]
-      : volumeStatus === 'unassigned' ? '#ef4444' : '#22c55e'
+      : volumeStatus === 'raq' ? '#eab308'
+        : volumeStatus === 'unassigned' ? '#ef4444' : '#22c55e'
 
   /* Clé stable pour le breakdown multi-temp / Stable key for multi-temp breakdown */
   const tempBreakdownKey = eqpByTemp
@@ -166,7 +172,8 @@ export function PdvMarker({ pdv, onClick, onTempClick, onContextMenu, selected, 
   const icon = useMemo(() => {
     const s = zoomScale(zoomLevel)
     /* Mode label / Label mode */
-    if (showLabel && eqpCount != null && eqpCount > 0 && volumeStatus === 'unassigned') {
+    const aPlanifier = volumeStatus === 'unassigned' || volumeStatus === 'raq'
+    if (showLabel && eqpCount != null && eqpCount > 0 && aPlanifier) {
       /* Multi-température : en-tête PDV + carrés colorés / Multi-temp: PDV header + colored squares */
       if (tempKeys.length > 1 && eqpByTemp) {
         return makeMultiTempLabelIcon(pdv.code, eqpByTemp, hasPickup, s)
@@ -176,6 +183,7 @@ export function PdvMarker({ pdv, onClick, onTempClick, onContextMenu, selected, 
     }
     /* Mode pastille classique — taille scalée / Classic dot mode — scaled size */
     if (selected) return makeIcon('#f97316', Math.round(24 * s), Math.round(3 * s), hasPickup)
+    if (volumeStatus === 'raq') return makeIcon('#eab308', Math.round(18 * s), Math.round(2 * s), hasPickup)
     if (volumeStatus === 'unassigned') return makeIcon('#ef4444', Math.round(18 * s), Math.round(2 * s), hasPickup)
     if (volumeStatus === 'assigned') return makeIcon('#22c55e', Math.round(18 * s), Math.round(2 * s), hasPickup)
     return makeIcon('#9ca3af', Math.round(14 * s), Math.round(2 * s), hasPickup)

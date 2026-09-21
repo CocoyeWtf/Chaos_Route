@@ -303,6 +303,15 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
         m.set(v.pdv_id, 'unassigned')
       }
     }
+    /* Reste à quai (#68) : parmi les volumes à planifier, ceux qui reviennent
+       d'une tournée où ils ne sont pas partis prennent une couleur distincte —
+       ils sont prioritaires. / Left-at-dock volumes get their own colour. */
+    for (const v of allDayVolumes) {
+      if (tempFilters.size > 0 && !tempFilters.has(v.temperature_class)) continue
+      if (v.is_raq && !v.tour_id && !consumedVolumeIds.has(v.id)) {
+        m.set(v.pdv_id, 'raq')
+      }
+    }
     for (const v of allDayVolumes) {
       if (tempFilters.size > 0 && !tempFilters.has(v.temperature_class)) continue
       if (v.tour_id || consumedVolumeIds.has(v.id)) {

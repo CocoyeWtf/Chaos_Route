@@ -29,7 +29,7 @@ from app.models.user import User
 from app.models.pickup_request import PickupRequest, PickupLabel, PickupStatus, PickupType, LabelStatus
 from app.models.vehicle import Vehicle, FleetVehicleType, VehicleStatus
 from app.models.tour_manifest_line import TourManifestLine
-from app.schemas.tour import ManifestLineRead, ReorderStopsRequest, TourCreate, TourGateUpdate, TourOperationsUpdate, TourRead, TourSchedule, TourStopInsert, TourStopUpdate, TourUpdate
+from app.schemas.tour import ManifestLineRead, ReorderStopsRequest, TourCreate, TourGateUpdate, TourOperationsUpdate, TourRead, TourSchedule, TourStopInsert, TourStopRaq, TourStopUpdate, TourUpdate
 from app.api.deps import require_permission, get_user_region_ids
 from app.utils.fuel_pricing import load_fuel_unit_prices, price_for_contract, contract_fuel_type
 from app.services.cmro_extraction import CMRO_COLUMNS, CMRO_FIELDS, build_row as _build_cmro_row
@@ -3121,6 +3121,99 @@ async def _recalc_tour_after_stop_change(db: AsyncSession, tour: Tour) -> dict:
 
     await db.flush()
     return {"warnings": warnings}
+
+
+@router.post("/{tour_id}/stops/{stop_id}/raq", response_model=TourRead)
+async def declare_stop_raq(
+    tour_id: int,
+    stop_id: int,
+    data: TourStopRaq,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-stop-modify", "update")),
+):
+    """Déclarer un reste à quai sur un arrêt (ticket #68).
+
+    Le postier constate au chargement qu'une partie de la marchandise n'est pas
+    partie. Deux effets, décidés avec l'exploitation :
+      - l'arrêt est réduit d'autant : la tournée, sa feuille de route et sa
+        lettre de voiture annoncent ce qui est RÉELLEMENT parti ;
+      - la quantité restée à quai repart dans les volumes disponibles, marquée
+        « RAQ » et rattachée au code de la tournée d'origine, pour être replacée
+        dans une tournée suivante à la date choisie par le postier.
+    L'écart avec le prévisionnel reste lisible dans la trace d'audit. /
+    Declare goods left at the dock: shrink the stop, put the remainder back into
+    the available volumes flagged RAQ.
+    """
+    tour = await db.get(Tour, tour_id, options=[selectinload(Tour.stops)])
+    if not tour:
+        raise HTTPException(404, "Tour not found")
+    if tour.status == TourStatus.COMPLETED:
+        raise HTTPException(409, "Tournée terminée : reste à quai non déclarable")
+
+    target = next((s for s in tour.stops if s.id == stop_id), None)
+    if not target:
+        raise HTTPException(404, "Stop not found in this tour")
+
+    planned = float(target.eqp_count or 0)
+    raq = float(data.eqp_count)
+    if raq > planned:
+        raise HTTPException(
+            422,
+            f"Reste à quai ({raq:.2f} EQC) supérieur à la quantité de l'arrêt "
+            f"({planned:.2f} EQC).",
+        )
+
+    # Le volume d'origine sert de gabarit : même base de chargement, même
+    # température, même journée d'origine. On prend celui rattaché à l'arrêt, et
+    # à défaut n'importe quel volume du PDV dans cette tournée (arrêts anciens
+    # sans volume source). / Use the source volume as a template.
+    modele = None
+    if target.volume_id is not None:
+        modele = await db.get(Volume, target.volume_id)
+    if modele is None:
+        modele = (await db.execute(
+            select(Volume).where(Volume.tour_id == tour_id, Volume.pdv_id == target.pdv_id)
+        )).scalars().first()
+    if modele is None:
+        raise HTTPException(
+            422,
+            "Aucun volume d'origine sur cet arrêt : impossible de déterminer la "
+            "base de chargement et la température du reste à quai.",
+        )
+
+    pdv = await db.get(PDV, target.pdv_id)
+
+    raq_volume = Volume(
+        pdv_id=target.pdv_id,
+        date=modele.date,
+        dispatch_date=data.dispatch_date,
+        eqp_count=raq,
+        temperature_class=modele.temperature_class,
+        base_origin_id=modele.base_origin_id,
+        activity_type=modele.activity_type,
+        tour_id=None,
+        is_raq=True,
+        raq_from_tour_code=tour.code,
+    )
+    db.add(raq_volume)
+
+    target.eqp_count = round(planned - raq, 2)
+    await db.flush()
+
+    await db.refresh(tour, ["stops"])
+    await _recalc_tour_after_stop_change(db, tour)
+
+    await _log_audit(db, "tour", tour.id, "RAQ", user, {
+        "stop_id": stop_id, "pdv_code": pdv.code if pdv else None,
+        "eqp_planned": planned, "eqp_raq": raq, "eqp_remaining": float(target.eqp_count),
+        "raq_volume_id": raq_volume.id, "dispatch_date": data.dispatch_date,
+    })
+
+    await db.flush()
+    refreshed = await db.execute(
+        select(Tour).where(Tour.id == tour.id).options(selectinload(Tour.stops))
+    )
+    return refreshed.scalar_one()
 
 
 @router.patch("/{tour_id}/stops/{stop_id}", response_model=TourRead)

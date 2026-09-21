@@ -38,6 +38,21 @@ export default function VolumeManagement() {
     },
     { key: 'temperature_class', label: t('volumes.temperatureClass'), width: '100px', filterable: true },
     {
+      /* Reste à quai (#68) : ces volumes reviennent d'une tournée où ils ne sont
+         pas partis ; la colonne est filtrable pour les retrouver d'un coup. */
+      key: 'is_raq' as keyof Volume, label: 'RAQ', width: '90px', filterable: true,
+      render: (row) => row.is_raq ? (
+        <span
+          className="px-1.5 py-0.5 rounded text-[10px] font-bold"
+          style={{ backgroundColor: 'rgba(234,179,8,0.18)', color: 'var(--color-warning)' }}
+          title={row.raq_from_tour_code ? `Resté à quai — tournée ${row.raq_from_tour_code}` : 'Resté à quai'}
+        >
+          RAQ
+        </span>
+      ) : '—',
+      filterValue: (row) => row.is_raq ? 'RAQ' : '',
+    },
+    {
       key: 'base_origin_id', label: t('volumes.baseOrigin'), width: '140px', filterable: true,
       render: (row) => bases.find((b) => b.id === row.base_origin_id)?.name || '—',
       filterValue: (row) => bases.find((b) => b.id === row.base_origin_id)?.name || '',

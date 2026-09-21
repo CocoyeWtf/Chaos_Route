@@ -2,7 +2,7 @@
 
 import enum
 
-from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, Numeric, String, inspect as sa_inspect
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, Index, Integer, Numeric, String, inspect as sa_inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -52,6 +52,16 @@ class Volume(Base, TenantMixin):
     promo_start_date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD
     # Groupe de split — volumes issus du même original / Split group — volumes from same original
     split_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Reste à quai (ticket #68) : marchandise annoncée mais non chargée, remise à
+    # disposition pour une tournée suivante. Le code de la tournée d'origine est
+    # conservé pour la traçabilité — volontairement comme un simple texte et non
+    # une clé étrangère, pour qu'une suppression de tournée ne bute pas dessus et
+    # que la trace survive à la tournée. /
+    # Left-at-dock goods, put back into the pool; the origin tour code is kept as
+    # plain text so the trace outlives the tour and never blocks its deletion.
+    is_raq: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    raq_from_tour_code: Mapped[str | None] = mapped_column(String(30))
 
     # Relations
     pdv: Mapped["PDV"] = relationship(back_populates="volumes")

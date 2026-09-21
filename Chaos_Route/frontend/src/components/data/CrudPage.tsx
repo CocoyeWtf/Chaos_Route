@@ -148,7 +148,19 @@ export function CrudPage<T extends { id: number }>({
     if (ids.length === 0) return
     setSaving(true)
     try {
-      await api.delete(`${endpoint}/bulk`, { params: { ids }, paramsSerializer: { indexes: null } })
+      /* Découpage en lots (#28) : les identifiants voyagent dans l'URL, qui est
+         plafonnée par le serveur. Supprimer plusieurs milliers de lignes d'un
+         coup — ce que permet désormais la sélection par filtre — produirait une
+         URL refusée. Les lots partent en séquence pour que le serveur ne voie
+         jamais une rafale de suppressions concurrentes. /
+         Chunk the ids: they travel in the URL, which has a server-side limit. */
+      const CHUNK = 200
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        await api.delete(`${endpoint}/bulk`, {
+          params: { ids: ids.slice(i, i + CHUNK) },
+          paramsSerializer: { indexes: null },
+        })
+      }
       refetch()
     } finally {
       setSaving(false)

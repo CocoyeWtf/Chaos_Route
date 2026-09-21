@@ -60,6 +60,8 @@ export function MapFilters() {
   const pdvLegend: LegendEntry[] = [
     { label: t('map.pdvNoVolume'), color: '#9ca3af', shape: 'circle', size: 8 },
     { label: t('map.pdvUnassigned'), color: '#ef4444', shape: 'circle', size: 10 },
+    // Reste à quai (#68) : volume disponible revenant d'une tournée non partie.
+    { label: 'Reste à quai', color: '#eab308', shape: 'circle', size: 10 },
     { label: t('map.pdvAssigned'), color: '#22c55e', shape: 'circle', size: 10 },
     { label: t('map.pdvSelected'), color: '#f97316', shape: 'circle', size: 12 },
     { label: 'Reprise en attente', color: '#f59e0b', shape: 'circle', size: 6 },

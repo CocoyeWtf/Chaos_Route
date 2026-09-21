@@ -202,6 +202,8 @@ export function DataTable<T extends { id: number }>({
   /* Pagination */
   const totalPages = Math.ceil(sorted.length / pageSize)
   const paged = sorted.slice(page * pageSize, (page + 1) * pageSize)
+  /* Toute la page est cochée → on peut proposer d'étendre au reste (#28). */
+  const pageFullySelected = paged.length > 0 && paged.every((r) => selectedIds.has(r.id))
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -246,6 +248,31 @@ export function DataTable<T extends { id: number }>({
               onClick={() => setBulkConfirm(true)}
             >
               Supprimer ({selectedIds.size})
+            </button>
+          )}
+          {/* Étendre la sélection à TOUTES les lignes filtrées (#28). La case
+              d'en-tête ne coche que la page affichée — 20 lignes — ce qui
+              imposait de supprimer par paquets de 20. On propose explicitement
+              l'extension plutôt que de l'appliquer en douce : c'est une
+              suppression de masse, elle doit rester un geste conscient. /
+              Offer to extend the selection to every filtered row: the header
+              checkbox only covers the visible page. */}
+          {onBulkDelete && pageFullySelected && sorted.length > selectedIds.size && (
+            <button
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+              style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+              onClick={() => setSelectedIds(new Set(sorted.map((r) => r.id)))}
+            >
+              Sélectionner les {sorted.length} lignes filtrées
+            </button>
+          )}
+          {onBulkDelete && selectedIds.size > 0 && (
+            <button
+              className="px-2 py-1.5 rounded-lg text-xs transition-colors"
+              style={{ color: 'var(--text-muted)' }}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Effacer la sélection
             </button>
           )}
         </div>
@@ -371,7 +398,7 @@ export function DataTable<T extends { id: number }>({
                     <input
                       type="checkbox"
                       className="accent-orange-500"
-                      checked={paged.length > 0 && paged.every((r) => selectedIds.has(r.id))}
+                      checked={pageFullySelected}
                       onChange={(e) => {
                         setSelectedIds((prev) => {
                           const next = new Set(prev)

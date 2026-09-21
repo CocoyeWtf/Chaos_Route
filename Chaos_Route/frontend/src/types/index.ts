@@ -150,6 +150,10 @@ export interface Volume {
   activity_type?: string | null      // 'SUIVI' | 'MEAV'
   promo_start_date?: string | null   // YYYY-MM-DD
   split_group_id?: number | null
+  // Reste à quai (#68) : marchandise non chargée, remise à disposition, avec le
+  // code de la tournée d'où elle vient. / Left at the dock, back in the pool.
+  is_raq?: boolean
+  raq_from_tour_code?: string | null
   pdv_code?: string | null           // Numéro PDV résolu côté serveur / PDV number from server
   pdv_name?: string | null
 }

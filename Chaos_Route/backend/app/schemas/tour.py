@@ -46,6 +46,16 @@ class TourStopUpdate(BaseModel):
     eqp_count: float = Field(ge=0, le=999)
 
 
+class TourStopRaq(BaseModel):
+    """Déclaration d'un reste à quai sur un arrêt (ticket #68).
+
+    Le postier constate au chargement que tout n'est pas parti : il annonce la
+    quantité restée à quai, et la date à laquelle elle redevient planifiable.
+    """
+    eqp_count: float = Field(gt=0, le=999)
+    dispatch_date: str = Field(min_length=10, max_length=10)
+
+
 class TourStopRead(TourStopBase):
     model_config = ConfigDict(from_attributes=True)
     id: int

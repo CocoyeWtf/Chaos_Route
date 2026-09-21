@@ -423,6 +423,17 @@ export default function Operations() {
     }
   }
 
+  /* Déclarer un reste à quai (#68) / Declare goods left at the dock */
+  const handleDeclareRaq = async (tourId: number, stopId: number, eqpCount: number, dispatchDate: string) => {
+    try {
+      await api.post(`/tours/${tourId}/stops/${stopId}/raq`, { eqp_count: eqpCount, dispatch_date: dispatchDate })
+      await loadTours(true)
+    } catch (e: unknown) {
+      const resp = (e as { response?: { data?: { detail?: string } } })?.response
+      alert(resp?.data?.detail || 'Erreur lors de la déclaration du reste à quai')
+    }
+  }
+
   /* Charger appareils quand modale ouvre / Load devices when modal opens */
   useEffect(() => {
     if (!assignQrTour) return
@@ -753,6 +764,7 @@ export default function Operations() {
                           onRemoveStop={handleRemoveStop}
                           onAddStop={handleAddStop}
                           onUpdateStopEqc={handleUpdateStopEqc}
+                          onDeclareRaq={handleDeclareRaq}
                           onReorderStops={handleReorderStops}
                           onDeleteTour={handleDeleteTour}
                           pdvs={pdvs}
@@ -793,6 +805,65 @@ export default function Operations() {
 }
 
 /* ─── Composant ligne tour / Tour row component ─── */
+
+/* Saisie d'un reste à quai (#68) / Inline RAQ entry.
+   Le postier annonce ce qui n'est pas parti et la journée où la marchandise
+   redevient planifiable ; le volume correspondant réapparaît alors dans les
+   volumes disponibles, marqué RAQ. */
+function RaqInline({ pdvCode, max, defaultDate, onCancel, onConfirm }: {
+  pdvCode: string
+  max: number
+  defaultDate: string
+  onCancel: () => void
+  onConfirm: (eqpCount: number, dispatchDate: string) => void
+}) {
+  const [eqp, setEqp] = useState('')
+  const [date, setDate] = useState(defaultDate)
+  const parsed = Number(eqp)
+  const valide = Number.isFinite(parsed) && parsed > 0 && parsed <= max && !!date
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 mb-2 p-2 rounded-lg border"
+      style={{ borderColor: 'var(--color-warning)', backgroundColor: 'rgba(234,179,8,0.06)' }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="text-xs font-semibold" style={{ color: 'var(--color-warning)' }}>
+        Reste à quai — {pdvCode}
+      </span>
+      <input
+        type="number" min={0.01} max={max} step={0.5} autoFocus
+        value={eqp}
+        onChange={(e) => setEqp(e.target.value)}
+        placeholder={`EQC (max ${max})`}
+        className="w-28 px-2 py-1 rounded border text-xs text-center"
+        style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+      />
+      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>replanifiable le</span>
+      <input
+        type="date"
+        value={date}
+        onChange={(e) => setDate(e.target.value)}
+        className="px-2 py-1 rounded border text-xs"
+        style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+      />
+      <button
+        className="text-[10px] px-2 py-1 rounded font-semibold text-white transition-all hover:opacity-80 disabled:opacity-40"
+        style={{ backgroundColor: 'var(--color-warning)' }}
+        disabled={!valide}
+        onClick={() => onConfirm(parsed, date)}
+      >
+        Confirmer
+      </button>
+      <button className="text-[10px] px-2 py-1 rounded" style={{ color: 'var(--text-muted)' }} onClick={onCancel}>
+        Annuler
+      </button>
+      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+        L'arrêt sera réduit d'autant ; ces EQC repartent dans les volumes disponibles.
+      </span>
+    </div>
+  )
+}
 
 /* Saisie des EQC d'un arrêt (#37) / Inline stop EQC editor.
    Validation à la sortie du champ ou sur Entrée, et uniquement si la valeur a
@@ -939,6 +1010,7 @@ interface TourRowProps {
   onRemoveStop: (tourId: number, stopId: number, pdvCode: string, temps?: TemperatureClass[]) => void
   onAddStop: (tourId: number, pdvId: number, eqpCount: number) => void
   onUpdateStopEqc: (tourId: number, stopId: number, eqpCount: number) => void
+  onDeclareRaq: (tourId: number, stopId: number, eqpCount: number, dispatchDate: string) => void
   onReorderStops: (tourId: number, stopOrder: number[]) => void
   onDeleteTour: (tourId: number, code: string, stopCount: number) => void
   pdvs: PDV[]
@@ -949,7 +1021,7 @@ function TourRow({
   visibleCols, colCount, t,
   onToggle, onFormChange, onSave, onRouteSheet, onWaybill, onAssignDevice, onUnassignDevice, onSetNow, onLoaderLookup, onPatchStopsEqc,
   canModifyStops, canDeleteTour, onRemoveStop, onAddStop, pdvs,
-  onUpdateStopEqc, onReorderStops, onDeleteTour,
+  onUpdateStopEqc, onDeclareRaq, onReorderStops, onDeleteTour,
 }: TourRowProps) {
   const vehicleLabel = contract?.vehicle_code
     ? `${contract.vehicle_code} — ${contract.vehicle_name ?? ''}`
@@ -962,6 +1034,20 @@ function TourRow({
     && (tour.status === 'DRAFT' || tour.status === 'VALIDATED')
 
   const orderedStops = [...tour.estimated_stops].sort((a, b) => a.sequence_order - b.sequence_order)
+
+  /* Reste à quai en cours de saisie (#68) / RAQ being declared */
+  const [raqStop, setRaqStop] = useState<{ id: number; pdvCode: string; max: number } | null>(null)
+
+  /* Par défaut, un reste à quai repart le lendemain de la livraison — le postier
+     le constate en fin de chargement. La date reste modifiable : un RAQ du matin
+     peut être replacé le jour même. / Default to the day after delivery, editable. */
+  const defaultRaqDate = (() => {
+    const ref = tour.delivery_date || tour.date
+    if (!ref) return ''
+    const d = new Date(`${ref}T00:00:00`)
+    d.setDate(d.getDate() + 1)
+    return d.toISOString().slice(0, 10)
+  })()
 
   /* Déplacer un arrêt d'un cran / Move a stop one position */
   const moveStop = (index: number, delta: number) => {
@@ -1158,6 +1244,21 @@ function TourRow({
                                   </button>
                                 </>
                               )}
+                              {/* Reste à quai (#68) : ce qui n'a pas pu être chargé
+                                  repart dans les volumes disponibles. */}
+                              {Number(stop.eqp_count) > 0 && (
+                                <button
+                                  className="text-[10px] px-1.5 py-0.5 rounded border font-semibold mr-1 transition-all hover:opacity-80"
+                                  style={{ borderColor: 'var(--color-warning)', color: 'var(--color-warning)' }}
+                                  title="Déclarer des EQC restés à quai — ils redeviennent planifiables"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setRaqStop({ id: stop.id, pdvCode: pdv?.code ?? '', max: Number(stop.eqp_count) })
+                                  }}
+                                >
+                                  RAQ
+                                </button>
+                              )}
                               {tour.stops.length > 1 && (
                                 <button
                                   className="text-[10px] px-1.5 py-0.5 rounded border font-semibold transition-all hover:opacity-80"
@@ -1184,6 +1285,17 @@ function TourRow({
                 </tbody>
               </table>
             </div>
+
+            {/* Saisie du reste à quai (#68) / RAQ entry */}
+            {raqStop && (
+              <RaqInline
+                pdvCode={raqStop.pdvCode}
+                max={raqStop.max}
+                defaultDate={defaultRaqDate}
+                onCancel={() => setRaqStop(null)}
+                onConfirm={(eqp, date) => { onDeclareRaq(tour.id, raqStop.id, eqp, date); setRaqStop(null) }}
+              />
+            )}
 
             {/* Ajouter un PDV / supprimer la tournée / Add PDV, delete tour */}
             <div className="flex items-center gap-2">

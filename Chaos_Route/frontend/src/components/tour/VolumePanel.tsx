@@ -266,6 +266,17 @@ export function VolumePanel({
                 >
                   {vol.temperature_class}
                 </span>
+                {/* Reste à quai (#68) : distingué des volumes ordinaires, pour
+                    que l'AT sache qu'il replanifie de la marchandise non partie. */}
+                {vol.is_raq && (
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                    style={{ backgroundColor: 'rgba(234,179,8,0.18)', color: 'var(--color-warning)' }}
+                    title={vol.raq_from_tour_code ? `Resté à quai — tournée ${vol.raq_from_tour_code}` : 'Resté à quai'}
+                  >
+                    RAQ
+                  </span>
+                )}
                 {vol.weight_kg && <span>{vol.weight_kg} kg</span>}
                 {dist != null && (
                   <span className="ml-auto font-semibold" style={{ color: 'var(--color-primary)' }}>

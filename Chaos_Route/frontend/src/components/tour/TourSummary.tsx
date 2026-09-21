@@ -88,6 +88,23 @@ function StopTempBreakdown({ stop, volumes }: { stop: TourStop; volumes?: Volume
   }
   // Sinon, calculer depuis les volumes (tour sauvegardé)
   if (!volumes || volumes.length === 0) return <span>{stop.eqp_count} EQC</span>
+  /* Le volume RÉELLEMENT rattaché à cet arrêt d'abord (#71) : agréger tous les
+     volumes du point de vente affichait « S + F » sur chacun de ses arrêts dès
+     qu'il était livré en sec ET en frais, et on ne savait plus lequel
+     transportait quoi. Même piège que #84 et #3/#6. /
+     Read this stop's own volume before falling back to the PDV's volumes. */
+  if (stop.volume_id != null) {
+    const propre = volumes.find((v) => v.id === stop.volume_id)
+    if (propre) {
+      const tc = propre.temperature_class
+      return (
+        <span className="inline-flex items-center gap-1">
+          <span className="px-1 rounded text-[8px] font-bold text-white" style={{ backgroundColor: TEMP_COLORS[tc] || '#999' }}>{TEMP_LABELS[tc] || tc}</span>
+          <span>{stop.eqp_count} EQC</span>
+        </span>
+      )
+    }
+  }
   const stopVols = volumes.filter((v) => v.pdv_id === stop.pdv_id)
   if (stopVols.length === 0) return <span>{stop.eqp_count} EQC</span>
   const byTemp: Record<string, number> = {}

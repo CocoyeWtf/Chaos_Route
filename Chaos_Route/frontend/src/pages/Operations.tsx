@@ -1277,15 +1277,31 @@ function TourRow({
                          transporte qu'une part de la commande d'origine (#49). */
                       const stopIsSplit = volumes.some((v) => v.tour_id === tour.id
                         && v.pdv_id === stop.pdv_id && v.split_group_id != null)
-                      /* Temperatures distinctes des volumes de ce stop, fallback sur le stop lui-meme /
-                         Distinct temperatures from this stop's volumes, fallback on the stop field */
+                      /* Température de CET arrêt (#71).
+
+                         On cherchait « les volumes du PDV dans cette tournée » :
+                         un point de vente livré en sec ET en frais voyait donc
+                         ses deux arrêts étiquetés « FRAIS SEC », et on ne savait
+                         plus lequel transportait quoi. L'arrêt connaît pourtant
+                         son volume d'origine — c'est le même piège que le #84 et
+                         que #3/#6 : deviner par point de vente au lieu de lire le
+                         volume réellement rattaché.
+
+                         Ordre : le volume de l'arrêt, sinon la classe portée par
+                         l'arrêt lui-même, sinon seulement l'ensemble des volumes
+                         du point de vente (arrêts anciens, sans volume source). /
+                         Temperature of THIS stop: read its own volume instead of
+                         guessing from every volume of the PDV. */
                       const stopTemps: TemperatureClass[] = (() => {
-                        const fromVolumes = volumes
+                        if (stop.volume_id != null) {
+                          const propre = volumes.find((v) => v.id === stop.volume_id)
+                          if (propre) return [propre.temperature_class]
+                        }
+                        if (stop.temperature_class) return [stop.temperature_class]
+                        const duPdv = volumes
                           .filter((v) => v.tour_id === tour.id && v.pdv_id === stop.pdv_id)
                           .map((v) => v.temperature_class)
-                        const distinct = Array.from(new Set(fromVolumes))
-                        if (distinct.length > 0) return distinct
-                        return stop.temperature_class ? [stop.temperature_class] : []
+                        return Array.from(new Set(duPdv))
                       })()
 
                       return (

@@ -367,17 +367,20 @@ async def export_postier_planning(
 
     - source=postier : date = date de LIVRAISON, comme l'onglet postier
       (`Operations.tsx` : delivery_date + heure de départ + statut != DRAFT).
-    - source=ordonnancement : date = date de PLANIFICATION, comme l'onglet
-      ordonnancement (`TourScheduler.tsx` charge sur Tour.date). Les brouillons
-      sans heure de départ sont exclus, mais les tours non encore validés sont
-      inclus : c'est justement l'export d'avant validation.
+    - source=ordonnancement : date = date de PLANIFICATION, et RIEN d'autre —
+      exactement ce que charge `TourScheduler.tsx` (`/tours/?date=`, sans filtre
+      de statut ni d'heure). Les brouillons sans contrat ni heure de départ sont
+      donc inclus : le service transport veut un export « brut » des tournées
+      construites, avant ordonnancement (3e passe du ticket #78). Une tournée pas
+      encore ordonnancée sort avec ses colonnes d'exploitation vides, ce qui la
+      distingue à la lecture.
     """
-    # Ordonnancé = une heure de départ a été posée (le contrat/moyen suit).
-    # Scheduled = a departure time has been set.
-    is_scheduled = and_(Tour.departure_time.is_not(None), Tour.departure_time != "")
     if source == "ordonnancement":
-        scope = and_(Tour.date == date, is_scheduled)
+        scope = Tour.date == date
     else:
+        # Ordonnancé = une heure de départ a été posée (le contrat/moyen suit).
+        # Scheduled = a departure time has been set.
+        is_scheduled = and_(Tour.departure_time.is_not(None), Tour.departure_time != "")
         scope = and_(Tour.delivery_date == date, is_scheduled,
                      Tour.status != TourStatus.DRAFT)
 

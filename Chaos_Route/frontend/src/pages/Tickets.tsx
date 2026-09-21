@@ -43,6 +43,7 @@ export default function Tickets() {
   const [creating, setCreating] = useState(false)
   /* Photos du ticket ouvert (chargées en blob authentifié) + visionneuse */
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({})
+  const [deletingPhoto, setDeletingPhoto] = useState<number | null>(null)
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -418,16 +419,46 @@ export default function Tickets() {
                 ) : (
                   <div className="grid grid-cols-4 gap-2">
                     {selected.photos!.map((p) => (
-                      <button key={p.id} type="button" onClick={() => photoUrls[p.id] && setLightbox(photoUrls[p.id])}
-                        className="block" title={p.filename}>
-                        {photoUrls[p.id] ? (
-                          <img src={photoUrls[p.id]} alt={p.filename}
-                            className="w-full h-16 object-cover rounded-lg border" style={{ borderColor: 'var(--border-color)' }} />
-                        ) : (
-                          <div className="w-full h-16 rounded-lg border flex items-center justify-center text-[10px]"
-                            style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>…</div>
-                        )}
-                      </button>
+                      <div key={p.id} className="relative">
+                        <button type="button" onClick={() => photoUrls[p.id] && setLightbox(photoUrls[p.id])}
+                          className="block w-full" title={p.filename}>
+                          {photoUrls[p.id] ? (
+                            <img src={photoUrls[p.id]} alt={p.filename}
+                              className="w-full h-16 object-cover rounded-lg border" style={{ borderColor: 'var(--border-color)' }} />
+                          ) : (
+                            <div className="w-full h-16 rounded-lg border flex items-center justify-center text-[10px]"
+                              style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>…</div>
+                          )}
+                        </button>
+                        {/* Retirer une photo (#82) : un ticket est plafonné à cinq.
+                            Quand il est rouvert parce que la correction ne convient
+                            pas, les captures du premier jet occupent toute la place
+                            et le demandeur ne peut plus illustrer sa réponse. /
+                            Remove a photo: five is the cap, and a reopened ticket
+                            needs room for fresh screenshots. */}
+                        <button
+                          type="button"
+                          className="absolute -top-1 -right-1 w-5 h-5 rounded-full text-[11px] font-bold text-white leading-none"
+                          style={{ backgroundColor: 'var(--color-danger)' }}
+                          title="Retirer cette photo"
+                          disabled={deletingPhoto === p.id}
+                          onClick={async () => {
+                            if (!confirm(`Retirer la photo « ${p.filename} » ?`)) return
+                            setDeletingPhoto(p.id)
+                            try {
+                              await api.delete(`/tickets/${selected.id}/photos/${p.id}`)
+                              await loadDetail(selected.id)
+                            } catch (e: unknown) {
+                              const resp = (e as { response?: { data?: { detail?: string } } })?.response
+                              alert(resp?.data?.detail || 'Suppression impossible')
+                            } finally {
+                              setDeletingPhoto(null)
+                            }
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}

@@ -368,7 +368,7 @@ export interface WaybillData {
 export const TOUR_TYPE_LABELS: Record<Exclude<TourType, 'LIVRAISON'>, string> = {
   ENLEVEMENT: 'Enlèvement',
   VIDANGES: 'Vidanges',
-  DEPLACEMENT_BASE: 'Déplacement',
+  DEPLACEMENT_BASE: 'Chauffeur parc',
   GARAGE: 'Garage',
   TRANSFERT_PDV: 'Transfert PDV',
   ENLEVEMENT_DEDIE: 'Enlèvement dédié',

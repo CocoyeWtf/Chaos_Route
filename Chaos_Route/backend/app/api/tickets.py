@@ -400,6 +400,54 @@ async def upload_ticket_photo(
     return photo
 
 
+@router.delete("/{ticket_id}/photos/{photo_id}", status_code=204)
+async def delete_ticket_photo(
+    ticket_id: int,
+    photo_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Retirer une photo d'un ticket (ticket #82).
+
+    Un ticket est plafonné à cinq photos. Quand il est rouvert parce que la
+    correction ne convient pas, le demandeur se retrouve bloqué : ses cinq
+    premières captures occupent la place, et il ne peut plus illustrer sa
+    réponse. Il peut désormais faire le ménage.
+
+    Même règle que la modification du ticket : l'auteur du ticket, ou un
+    administrateur. Le fichier est supprimé du disque avec la ligne, sinon les
+    images orphelines s'accumuleraient. /
+    Remove a photo so a reopened ticket can carry fresh screenshots.
+    """
+    ticket = await db.get(Ticket, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not _can_edit_ticket(user, ticket):
+        raise HTTPException(status_code=403, detail="Seul l'auteur du ticket peut retirer ses photos")
+
+    photo = await db.get(TicketPhoto, photo_id)
+    if not photo or photo.ticket_id != ticket_id:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    chemin = Path(photo.file_path)
+    await db.delete(photo)
+    await db.flush()
+    try:
+        if chemin.is_file():
+            chemin.unlink()
+    except OSError:
+        # Le fichier a déjà disparu ou n'est pas supprimable : la ligne, elle,
+        # est partie — on ne fait pas échouer la demande pour autant.
+        pass
+
+    # Trace : photo retirée (événement système) / system event for the audit trail
+    db.add(TicketComment(
+        ticket_id=ticket_id, user_id=user.id, user_name=_user_name(user),
+        body=f"{_user_name(user)} a retiré une photo.", is_system=True,
+        tenant_id=ticket.tenant_id,
+    ))
+
+
 @router.get("/{ticket_id}/photos/{photo_id}")
 async def download_ticket_photo(
     ticket_id: int,

@@ -2131,9 +2131,18 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                             ))}
                           </div>
 
-                          {/* Raison quand aucun contrat disponible (presté/mixte) /
-                              Reason when no contract available */}
-                          {(input.mode === 'preste' || input.mode === 'mixte') && contracts.length === 0 && (
+                          {/* Raison quand aucun contrat disponible (presté/mixte).
+                              Le message n'apparaît qu'une fois la recherche de
+                              contrats terminée pour CETTE tournée (#40) : la liste
+                              étant chargée tournée par tournée, elle est vide au
+                              premier rendu, et un « aucun contrat » rouge
+                              s'affichait sur chaque ligne pendant une dizaine de
+                              secondes avant de disparaître. /
+                              Only tell the user once the per-tour lookup is done:
+                              the map is empty on first render. */}
+                          {(input.mode === 'preste' || input.mode === 'mixte')
+                            && availableContractsMap[tour.id] !== undefined
+                            && contracts.length === 0 && (
                             <div className="text-[10px] leading-tight max-w-[280px]" style={{ color: 'var(--color-danger)' }}>
                               {(contractBlockersMap[tour.id]?.length ?? 0) > 0
                                 ? <>Aucun contrat : {contractBlockersMap[tour.id].join(' ; ')}</>
@@ -2155,9 +2164,16 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                               style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', maxWidth: '160px' }}
                             >
                               <option value="">{t('tourPlanning.selectContract')}</option>
-                              {contracts.map((c) => (
-                                <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
-                              ))}
+                              {/* Ordre alphabétique (#52) : la liste suivait l'ordre
+                                  de la base. Triée, taper les premières lettres suffit
+                                  à atteindre le contrat voulu. /
+                                  Alphabetical order makes type-ahead usable. */}
+                              {[...contracts]
+                                .sort((a, b) => `${a.code} ${a.transporter_name}`
+                                  .localeCompare(`${b.code} ${b.transporter_name}`, 'fr', { numeric: true }))
+                                .map((c) => (
+                                  <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
+                                ))}
                             </select>
                           )}
 

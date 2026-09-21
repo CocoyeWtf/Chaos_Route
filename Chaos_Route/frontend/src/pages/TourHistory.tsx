@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useApi } from '../hooks/useApi'
 import { useAppStore } from '../stores/useAppStore'
 import { useAuthStore } from '../stores/useAuthStore'
-import { remove, downloadTourHistory } from '../services/api'
+import api, { remove, downloadTourHistory } from '../services/api'
 import type { Tour, BaseLogistics, Contract } from '../types'
 import { TOUR_TYPE_LABELS } from '../types'
 import type { Column } from '../components/data/DataTable'
@@ -20,6 +20,10 @@ export default function TourHistory() {
   // L'export hit /exports/tour-history (gardé par tour-history:read) : gater le
   // bouton sur la même permission que le back. / Gate export on the backend perm.
   const canExport = useAuthStore((s) => s.hasPermission)('tour-history', 'read')
+  /* Retirer une tournée au postier est un droit à part (#80) : le transport le
+     peut, le poste de garde non. / Un-scheduling is its own permission. */
+  const canUnschedule = useAuthStore((s) => s.hasPermission)('tour-unschedule', 'update')
+  const [unscheduling, setUnscheduling] = useState<number | null>(null)
   const [deleting, setDeleting] = useState<number | null>(null)
   const [costTourId, setCostTourId] = useState<number | null>(null)
   const [gpsTour, setGpsTour] = useState<{ id: number; code: string } | null>(null)
@@ -49,6 +53,32 @@ export default function TourHistory() {
       console.error('Failed to export tour history', e)
     } finally {
       setExporting(false)
+    }
+  }
+
+  /* Remettre la tournée à l'ordonnancement (#80).
+
+     Supprimer une tournée renvoie ses volumes à la construction, et il faut tout
+     reconstruire sur la carte. Or elle est le plus souvent annulée pour changer
+     de chauffeur : les points de vente et leur ordre restent bons. Cette action
+     retire seulement la planification — contrat, véhicule, heures — et la
+     tournée réapparaît dans l'ordonnancement, prête à être réattribuée. /
+     Un-schedule instead of delete: the stops stay, only the assignment goes. */
+  const handleUnschedule = async (tour: Tour) => {
+    if (!confirm(
+      `Remettre la tournée ${tour.code} à l'ordonnancement ?\n\n`
+      + `Ses points de vente et leur ordre sont conservés. Le contrat, le véhicule `
+      + `et les heures sont retirés : vous pourrez la réattribuer.`
+    )) return
+    setUnscheduling(tour.id)
+    try {
+      await api.delete(`/tours/${tour.id}/schedule`)
+      refetch()
+    } catch (e: unknown) {
+      const resp = (e as { response?: { data?: { detail?: string } } })?.response
+      alert(resp?.data?.detail || "Impossible de remettre la tournée à l'ordonnancement")
+    } finally {
+      setUnscheduling(null)
     }
   }
 
@@ -218,10 +248,28 @@ export default function TourHistory() {
     {
       key: 'id' as keyof Tour,
       label: '',
-      width: '80px',
+      width: '190px',
       render: (row) => {
         const locked = !!row.departure_signal_time
         return (
+          <>
+          {/* Remettre à l'ordonnancement (#80) : proposé AVANT la suppression,
+              c'est le geste courant — on annule pour changer de chauffeur. */}
+          {canUnschedule && row.departure_time && (
+            <button
+              className="text-xs px-2 py-1 rounded mr-1 transition-colors hover:opacity-80"
+              style={{
+                color: locked ? 'var(--text-muted)' : 'var(--color-primary)',
+                backgroundColor: locked ? 'var(--bg-tertiary)' : 'rgba(249,115,22,0.1)',
+                cursor: locked ? 'not-allowed' : undefined,
+              }}
+              onClick={(e) => { e.stopPropagation(); if (!locked) handleUnschedule(row) }}
+              disabled={unscheduling === row.id || locked}
+              title="Retire le contrat, le véhicule et les heures ; les points de vente restent"
+            >
+              {unscheduling === row.id ? '...' : 'Ordonnancement'}
+            </button>
+          )}
           <button
             className="text-xs px-2 py-1 rounded transition-colors hover:opacity-80"
             style={{
@@ -235,6 +283,7 @@ export default function TourHistory() {
           >
             {locked ? '🔒' : deleting === row.id ? '...' : t('tourHistory.undoTour')}
           </button>
+          </>
         )
       },
     },

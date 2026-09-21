@@ -1152,7 +1152,10 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                 className="rounded-lg border px-3 py-2 text-sm"
                 style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               >
-                <option value="DEPLACEMENT_BASE">Déplacement base</option>
+                {/* « Chauffeur parc » (#53) : mouvements de remorques au sein
+                    d'une même base. Le libellé « déplacement base » laissait
+                    croire qu'on pouvait y faire les navettes entre bases. */}
+                <option value="DEPLACEMENT_BASE">Chauffeur parc</option>
                 <option value="GARAGE">Garage / atelier</option>
                 <option value="TRANSFERT_PDV">Transfert PDV à PDV</option>
                 <option value="ENLEVEMENT_DEDIE">Enlèvement dédié</option>

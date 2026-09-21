@@ -83,6 +83,8 @@ class TourBase(BaseModel):
     total_weight_kg: float | None = None
     status: TourStatus = TourStatus.DRAFT
     base_id: int
+    # Base de retour si différente de la base de départ (#64) ; None = même base
+    return_base_id: int | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool = False
@@ -138,6 +140,7 @@ class TourUpdate(BaseModel):
     total_weight_kg: float | None = None
     status: TourStatus | None = None
     base_id: int | None = None
+    return_base_id: int | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool | None = None
@@ -214,6 +217,7 @@ class TourSchedule(BaseModel):
     driver_name: str | None = None          # propre : chauffeur base
     driver_code_infolog: str | None = None  # code Infolog du chauffeur (export WMS)
     priority: float | None = None           # priorité manuelle d'ordonnancement, décimale (#29)
+    return_base_id: int | None = None       # base de retour si différente du départ (#64)
 
     @model_validator(mode="after")
     def check_assignment(self) -> "TourSchedule":

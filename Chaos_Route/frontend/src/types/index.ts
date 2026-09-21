@@ -197,6 +197,8 @@ export type TourType = 'LIVRAISON' | 'ENLEVEMENT' | 'VIDANGES' | 'DEPLACEMENT_BA
 
 export interface Tour {
   id: number
+  /* Base de retour si elle diffère de la base de départ (#64) ; null = même base. */
+  return_base_id?: number | null
   date: string
   code: string
   vehicle_type?: VehicleType

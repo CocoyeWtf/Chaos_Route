@@ -28,7 +28,9 @@ class BaseLogistics(Base, TenantMixin):
 
     # Relations
     region: Mapped["Region"] = relationship(back_populates="bases")
-    tours: Mapped[list["Tour"]] = relationship(back_populates="base")
+    tours: Mapped[list["Tour"]] = relationship(
+        back_populates="base", foreign_keys="Tour.base_id"
+    )
     activities: Mapped[list["BaseActivity"]] = relationship(
         secondary=base_activity_link, back_populates="bases", lazy="selectin"
     )

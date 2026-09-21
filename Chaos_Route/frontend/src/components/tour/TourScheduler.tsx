@@ -153,8 +153,10 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     tractorId: number | null
     driverName: string
     priority: number | null
+    /* Base de retour quand elle diffère du départ (#64) ; null = même base. */
+    returnBaseId: number | null
   }
-  const EMPTY_INPUT: ScheduleInput = { time: '', deliveryDate: '', mode: 'preste', contractId: null, vehicleId: null, tractorId: null, driverName: '', priority: null }
+  const EMPTY_INPUT: ScheduleInput = { time: '', deliveryDate: '', mode: 'preste', contractId: null, vehicleId: null, tractorId: null, driverName: '', priority: null, returnBaseId: null }
 
   const [tours, setTours] = useState<Tour[]>([])
   const [timeline, setTimeline] = useState<GanttTour[]>([])
@@ -765,6 +767,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
         tractorId: tour.tractor_id ?? null,
         driverName: tour.driver_name ?? '',
         priority: tour.priority ?? null,
+        returnBaseId: tour.return_base_id ?? null,
       },
     }))
     loadContractsForTour(tour, tour.delivery_date ?? undefined)
@@ -799,6 +802,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
         driver_name: input.driverName || null,
         driver_code_infolog: matchedDriver?.code_infolog ?? null,
         priority: input.priority ?? null,
+        return_base_id: input.returnBaseId ?? null,
       }, { params: force ? { force: true } : undefined })
       await loadData()
       setEditingTourId(null)
@@ -994,7 +998,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
 
   const updateInput = (
     tourId: number,
-    field: 'time' | 'contractId' | 'deliveryDate' | 'mode' | 'vehicleId' | 'tractorId' | 'driverName' | 'priority',
+    field: 'time' | 'contractId' | 'deliveryDate' | 'mode' | 'vehicleId' | 'tractorId' | 'driverName' | 'priority' | 'returnBaseId',
     value: string | number | null
   ) => {
     setScheduleInputs((prev) => {
@@ -2277,6 +2281,32 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                             style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                           />
 
+                          {/* Base de retour (#64) : un chauffeur parti de Villers peut
+                              recharger à Trazegnies et y terminer. Laisser « Retour
+                              départ » garde le calcul actuel ; choisir une autre base
+                              fait porter le dernier trajet — km, horaire de retour et
+                              taxe — sur le bon segment, au lieu d'obliger l'agent
+                              trafic à décaler le départ du tour suivant à la main. /
+                              Return base when it differs from the departure base. */}
+                          <select
+                            value={input.returnBaseId ?? ''}
+                            onChange={(e) => updateInput(tour.id, 'returnBaseId', e.target.value ? Number(e.target.value) : null)}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Base de fin de tournée si elle diffère de la base de départ"
+                            className="rounded border px-1.5 py-1 text-[11px] min-w-0 shrink-0"
+                            style={{
+                              backgroundColor: 'var(--bg-primary)',
+                              borderColor: input.returnBaseId ? 'var(--color-warning)' : 'var(--border-color)',
+                              color: 'var(--text-primary)',
+                              maxWidth: '130px',
+                            }}
+                          >
+                            <option value="">Retour départ</option>
+                            {bases.filter((b) => b.id !== tour.base_id).map((b) => (
+                              <option key={b.id} value={b.id}>Retour {b.code}</option>
+                            ))}
+                          </select>
+
                           {/* Priorité manuelle (départage les départs à même heure) */}
                           <input
                             type="number"
@@ -2347,6 +2377,18 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                           <span className="text-[11px] font-mono" style={{ color: 'var(--text-primary)' }}>
                             {tour.departure_time} → {tour.return_time}
                           </span>
+                          {/* Le top départ est validé : plus rien n'est modifiable, mais
+                              une fin sur une autre base doit rester visible (#64). /
+                              Once departure is signed off, still show a different return base. */}
+                          {tour.return_base_id && tour.return_base_id !== tour.base_id && (
+                            <span
+                              className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"
+                              title="Cette tournée se termine sur une autre base que celle de départ"
+                              style={{ backgroundColor: 'rgba(234,179,8,0.15)', color: 'var(--color-warning)' }}
+                            >
+                              ↩ {bases.find((b) => b.id === tour.return_base_id)?.code ?? tour.return_base_id}
+                            </span>
+                          )}
                           <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-tertiary)' }}>
                             Top depart valide
                           </span>

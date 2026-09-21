@@ -47,6 +47,16 @@ NON_DELIVERY_TYPES = {
 PICKUP_TYPES = {TourType.ENLEVEMENT, TourType.VIDANGES}
 
 
+def return_base_of(tour: "Tour") -> int:
+    """Base sur laquelle la tournée se termine réellement (#64).
+
+    Un seul endroit décide de la règle « rien de précisé = retour sur la base
+    de départ », pour que le kilométrage, l'horaire de retour et la taxe km la
+    lisent tous de la même façon. / The tour's actual return base.
+    """
+    return tour.return_base_id or tour.base_id
+
+
 class Tour(Base, TenantMixin):
     __tablename__ = "tours"
     __table_args__ = (
@@ -72,6 +82,14 @@ class Tour(Base, TenantMixin):
     # Poids total du tour (saisi par le postier) / Total tour weight (entered by dispatcher)
     status: Mapped[TourStatus] = mapped_column(Enum(TourStatus), default=TourStatus.DRAFT)
     base_id: Mapped[int] = mapped_column(ForeignKey("bases_logistics.id"), nullable=False)
+    # Base de retour quand elle diffère de la base de départ (#64) : un
+    # chauffeur parti de Villers peut recharger à Trazegnies et y terminer.
+    # NULL = retour sur la base de départ, le cas général, de sorte que les
+    # tournées existantes gardent exactement le même calcul. /
+    # Return base when it differs from the departure base; NULL = same base.
+    return_base_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bases_logistics.id"), nullable=True
+    )
     delivery_date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD — date de livraison
     temperature_type: Mapped[str | None] = mapped_column(String(10))  # SEC|FRAIS|GEL|BI_TEMP|TRI_TEMP
     is_pickup_tour: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -135,7 +153,15 @@ class Tour(Base, TenantMixin):
 
     # Relations
     contract: Mapped["Contract | None"] = relationship(back_populates="tours")
-    base: Mapped["BaseLogistics"] = relationship(back_populates="tours")
+    # La tournée a désormais deux liens vers une base (départ et retour, #64) :
+    # il faut dire explicitement lequel porte la relation, sinon SQLAlchemy ne
+    # peut plus choisir. / Two FKs to bases now: name the one this relation uses.
+    base: Mapped["BaseLogistics"] = relationship(
+        back_populates="tours", foreign_keys=[base_id]
+    )
+    return_base: Mapped["BaseLogistics | None"] = relationship(
+        foreign_keys=[return_base_id]
+    )
     vehicle: Mapped["Vehicle | None"] = relationship(foreign_keys=[vehicle_id])
     tractor: Mapped["Vehicle | None"] = relationship(foreign_keys=[tractor_id])
     supplier: Mapped["Supplier | None"] = relationship(foreign_keys=[supplier_id])

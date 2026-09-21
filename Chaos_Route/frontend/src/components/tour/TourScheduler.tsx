@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/useAuthStore'
 import { TourGantt, type GanttTour } from './TourGantt'
 import { TourPrintPlan } from './TourPrintPlan'
 import { formatDuration, parseTime, formatTime, formatDate, DEFAULT_DOCK_TIME, DEFAULT_UNLOAD_PER_EQP } from '../../utils/tourTimeUtils'
+import { driverWorksOn } from '../../types'
 import { VEHICLE_TYPE_DEFAULTS, TEMPERATURE_TYPE_LABELS, TEMPERATURE_COLORS, TOUR_TYPE_LABELS } from '../../types'
 import api, { downloadPostierPlanning } from '../../services/api'
 import { CostBreakdown } from './CostBreakdown'
@@ -140,7 +141,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   const vehicleMap = useMemo(() => new Map(allVehicles.map((v) => [v.id, v])), [allVehicles])
 
   /* Chauffeurs base / Base drivers */
-  const { data: baseDrivers } = useApi<{ id: number; last_name: string; first_name: string; code_infolog: string; base_id: number }>('/base-drivers')
+  const { data: baseDrivers } = useApi<{ id: number; last_name: string; first_name: string; code_infolog: string; base_id: number; work_days?: string | null }>('/base-drivers')
 
   /* Type de l'input d'ordonnancement / Schedule input type */
   interface ScheduleInput {
@@ -2214,9 +2215,22 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                                 style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', maxWidth: '140px' }}
                               >
                                 <option value="">Chauffeur</option>
-                                {baseDrivers.map((d) => (
-                                  <option key={d.id} value={`${d.last_name} ${d.first_name}`}>{d.last_name} {d.first_name}</option>
-                                ))}
+                                {/* Régime 4/5 (#33) : un chauffeur qui ne travaille
+                                    pas ce jour-là reste sélectionnable — un
+                                    remplacement reste possible — mais il est
+                                    signalé, et repoussé en fin de liste. /
+                                    Part-time drivers are flagged, not hidden. */}
+                                {[...baseDrivers]
+                                  .sort((a, b) => Number(driverWorksOn(b.work_days, input.deliveryDate || selectedDate))
+                                    - Number(driverWorksOn(a.work_days, input.deliveryDate || selectedDate)))
+                                  .map((d) => {
+                                    const dispo = driverWorksOn(d.work_days, input.deliveryDate || selectedDate)
+                                    return (
+                                      <option key={d.id} value={`${d.last_name} ${d.first_name}`}>
+                                        {d.last_name} {d.first_name}{dispo ? '' : ' — ne travaille pas ce jour'}
+                                      </option>
+                                    )
+                                  })}
                               </select>
                             </>
                           )}

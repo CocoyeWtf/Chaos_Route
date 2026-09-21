@@ -255,8 +255,23 @@ export interface Loader {
   base_id: number
 }
 
+/* Jours de la semaine, dans l'ordre, pour les régimes de travail (#33).
+   L'indice correspond à celui de Date.getDay() décalé : dimanche = 0. */
+export const WEEK_DAYS = ['LUN', 'MAR', 'MER', 'JEU', 'VEN', 'SAM', 'DIM'] as const
+
+/** Le chauffeur travaille-t-il ce jour-là ? Régime vide = semaine complète. */
+export function driverWorksOn(workDays: string | null | undefined, isoDate: string): boolean {
+  if (!workDays) return true
+  const d = new Date(`${isoDate}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return true
+  const code = WEEK_DAYS[(d.getDay() + 6) % 7]
+  return workDays.split(',').map((x) => x.trim().toUpperCase()).includes(code)
+}
+
 export interface BaseDriver {
   id: number
+  /* Régime de travail (#33) : « LUN,MAR,MER,JEU,VEN ». Vide = semaine complète. */
+  work_days?: string | null
   last_name: string
   first_name: string
   code_infolog: string

@@ -39,6 +39,15 @@ class BaseDriver(Base, TenantMixin):
     # --- Rattachement / Home base ---
     base_id: Mapped[int] = mapped_column(ForeignKey("bases_logistics.id"), nullable=False)
 
+    # --- Régime de travail (#33) ---
+    # Jours travaillés, en clair : « LUN,MAR,MER,JEU,VEN ». Vide ou absent =
+    # semaine complète, pour ne rien changer aux chauffeurs déjà enregistrés.
+    # Un contrat 4/5 se traduit simplement par un jour en moins dans la liste,
+    # et l'ordonnancement peut alors signaler qu'on attribue une tournée à
+    # quelqu'un qui ne travaille pas ce jour-là. /
+    # Working days as plain text; empty means the full week.
+    work_days: Mapped[str | None] = mapped_column(String(40))
+
     # --- Contact ---
     phone: Mapped[str | None] = mapped_column(String(30))
     email: Mapped[str | None] = mapped_column(String(150))

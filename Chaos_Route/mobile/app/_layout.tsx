@@ -11,7 +11,11 @@ import * as Application from 'expo-application'
 import { useDeviceStore } from '../stores/useDeviceStore'
 import { useAuthStore } from '../stores/useAuthStore'
 import { COLORS } from '../constants/config'
-import { checkForUpdate, downloadAndInstallApk } from '../services/updateChecker'
+import {
+  checkForUpdate, downloadAndInstallApk,
+  getAttemptedBuild, rememberAttempt, clearAttempt,
+  getLocalVersion, getLocalBuild,
+} from '../services/updateChecker'
 import { verifyKioskPassword } from '../services/kioskMode'
 
 /* Filet de sécurité : tout crash de rendu JS dans l'arbre de routes affiche un
@@ -48,6 +52,9 @@ export default function RootLayout() {
   const [updateSha256, setUpdateSha256] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
   const [updateError, setUpdateError] = useState('')
+  // Build vise + tentative precedente restee sans effet (#14) / Target build and stalled attempt
+  const [updateBuild, setUpdateBuild] = useState<number | null>(null)
+  const [updateFailed, setUpdateFailed] = useState(false)
   // Garde : ne declenche l'installation automatique qu'une fois par detection /
   // Guard: auto-trigger install only once per detection
   const autoStartedRef = useRef(false)
@@ -71,10 +78,24 @@ export default function RootLayout() {
     ;(async () => {
       const { updateAvailable: hasUpdate, versionInfo } = await checkForUpdate()
       if (hasUpdate && versionInfo?.download_url) {
+        // Ticket #14 : si on avait DEJA tente d'installer ce build et qu'on tourne
+        // encore sur l'ancien, c'est que l'installation n'a pas abouti (invite
+        // refusee, autorisation « sources inconnues » absente, ou signature
+        // differente qui impose une desinstallation). On le DIT, au lieu de
+        // relancer un telechargement invisible a chaque ouverture — c'est ce
+        // silence qui faisait croire que la mise a jour « disparaissait ». /
+        // If we already attempted this build and are still on the old one, the
+        // install did not go through: say so instead of silently retrying.
+        const attempted = await getAttemptedBuild()
+        setUpdateFailed(attempted === versionInfo.build_number)
         setUpdateAvailable(true)
         setUpdateVersion(versionInfo.version)
+        setUpdateBuild(versionInfo.build_number ?? null)
         setDownloadUrl(versionInfo.download_url)
         setUpdateSha256(versionInfo.sha256 ?? null)
+      } else {
+        // A jour : on oublie toute tentative precedente. / Up to date: forget attempts.
+        await clearAttempt()
       }
     })()
   }, [])
@@ -133,6 +154,10 @@ export default function RootLayout() {
     setDownloading(true)
     setUpdateError('')
     try {
+      // Noter la tentative AVANT de lancer l'installeur : celui-ci tue l'app,
+      // on n'aurait plus la main apres. / Record before launching the installer,
+      // which kills the app.
+      if (updateBuild != null) await rememberAttempt(updateBuild)
       await downloadAndInstallApk(downloadUrl, updateSha256)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -144,7 +169,7 @@ export default function RootLayout() {
     } finally {
       setDownloading(false)
     }
-  }, [downloadUrl, updateSha256])
+  }, [downloadUrl, updateSha256, updateBuild])
 
   // Mise a jour NON refusable : des qu'une MAJ est detectee, on lance
   // automatiquement le telechargement + l'installation, sans demander l'accord de
@@ -153,11 +178,13 @@ export default function RootLayout() {
   // Non-declinable update: auto-start download+install as soon as an update is
   // detected, without asking the crew member (a pushed update is mandatory).
   useEffect(() => {
-    if (updateAvailable && downloadUrl && !autoStartedRef.current) {
+    // #14 : on ne relance PAS automatiquement si la tentative precedente sur ce
+    // meme build n'a rien donne — l'equipier lit d'abord la marche a suivre.
+    if (updateAvailable && downloadUrl && !updateFailed && !autoStartedRef.current) {
       autoStartedRef.current = true
       handleUpdate()
     }
-  }, [updateAvailable, downloadUrl, handleUpdate])
+  }, [updateAvailable, downloadUrl, updateFailed, handleUpdate])
 
   // Triple-tap pour ouvrir la modale kiosque / Triple-tap to open kiosk modal
   const handleKioskTap = useCallback(() => {
@@ -210,13 +237,42 @@ export default function RootLayout() {
       <Modal visible={updateAvailable} animationType="fade" transparent>
         <View style={updateStyles.overlay}>
           <View style={updateStyles.card}>
-            <Text style={updateStyles.title}>Mise a jour obligatoire</Text>
-            <Text style={updateStyles.version}>Version {updateVersion}</Text>
-            <Text style={updateStyles.desc}>
-              Une nouvelle version est installee automatiquement. Validez l'invite
-              d'installation d'Android. L'application ne peut pas etre utilisee tant
-              que la mise a jour n'est pas terminee.
+            <Text style={updateStyles.title}>
+              {updateFailed ? 'Mise a jour non appliquee' : 'Mise a jour obligatoire'}
             </Text>
+            {/* Version ET build : les builds successifs partagent le meme nom de
+                version, seul le build permet de voir ce qui tourne (#14). */}
+            <Text style={updateStyles.version}>
+              Version {updateVersion}{updateBuild != null ? ` (build ${updateBuild})` : ''}
+            </Text>
+            <Text style={updateStyles.version}>
+              Installe : {getLocalVersion()} (build {getLocalBuild()})
+            </Text>
+            {updateFailed ? (
+              <>
+                <Text style={updateStyles.desc}>
+                  L'installation lancee precedemment n'a pas abouti : cette tablette
+                  tourne toujours sur le build {getLocalBuild()}.
+                </Text>
+                <Text style={updateStyles.desc}>
+                  1. Relancez avec le bouton ci-dessous et validez l'invite d'Android.
+                </Text>
+                <Text style={updateStyles.desc}>
+                  2. Si Android demande l'autorisation d'installer des applications
+                  inconnues, accordez-la a CMRO Driver puis reessayez.
+                </Text>
+                <Text style={updateStyles.desc}>
+                  3. Si le message « Application non installee » persiste, desinstallez
+                  l'application puis reinstallez-la depuis le QR code.
+                </Text>
+              </>
+            ) : (
+              <Text style={updateStyles.desc}>
+                Une nouvelle version est installee automatiquement. Validez l'invite
+                d'installation d'Android. L'application ne peut pas etre utilisee tant
+                que la mise a jour n'est pas terminee.
+              </Text>
+            )}
             {downloading ? (
               <View style={updateStyles.progressRow}>
                 <ActivityIndicator size="small" color={COLORS.primary} />

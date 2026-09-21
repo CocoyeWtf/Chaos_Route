@@ -53,6 +53,16 @@ def _apk_sha256(apk_path: Path) -> str | None:
 # pour declencher la mise a jour. Egal ou inferieur = pas de mise a jour.
 APP_VERSION = "1.9.3"
 APP_BUILD_NUMBER = 14
+# Ticket #14 — ORDRE DES OPERATIONS pour publier le build 15 (app.json est deja
+# passe en 1.9.4 / versionCode 15) :
+#   1. eas build -p android --profile production
+#   2. deposer l'APK sur le serveur a apk/cmro-driver.apk
+#   3. SEULEMENT ENSUITE : APP_VERSION = "1.9.4", APP_BUILD_NUMBER = 15
+# Inverser 2 et 3 forcerait toutes les tablettes vers un APK qui n'est pas celui
+# annonce. A partir du build 15, le nom de version est incremente a chaque build
+# (11 a 14 partageaient « 1.9.3 », ce qui rendait toute mise a jour invisible) et
+# l'app remonte son build natif dans l'en-tete X-App-Build. /
+# Release order for build 15: build, upload the APK, THEN bump these constants.
 
 # Coupe-circuit auto-update / Auto-update kill switch.
 # Reactive (ticket #14) : le build 14 (1.9.3) corrige l'ecran blanc du build 11

@@ -432,6 +432,15 @@ export default function DeviceManagement() {
                           ? <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: '#22c55e22', color: '#22c55e' }}>Enregistre</span>
                           : <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: '#f59e0b22', color: '#f59e0b' }}>En attente</span>
                         }
+                        {/* Version ET build (#14) : le nom de version seul ne distingue
+                            pas les builds 11 à 14, tous appelés « 1.9.3 » — impossible
+                            de savoir si une tablette avait pris la mise à jour. Le
+                            build n'apparaît qu'à partir des apps qui le remontent. */}
+                        {d.app_version && (
+                          <div className="text-[10px] mt-0.5 whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                            v{d.app_version}{d.app_build != null ? ` (build ${d.app_build})` : ' (build inconnu)'}
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>{d.device_identifier || '—'}</td>
                       <td className="px-3 py-2 whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>{baseName(d.base_id)}</td>

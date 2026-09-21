@@ -42,14 +42,36 @@ def is_return_support_code(code: str | None) -> bool:
 
 # Inférence du type de reprise à partir du préfixe de code /
 # Infer pickup type from code prefix (used when an inventory line becomes a pickup request)
+#
+# Ticket #15, « chacun dans sa bonne catégorie ». Deux corrections par rapport à
+# la version précédente, qui rangeait CO, PA ET PL dans CONTAINER et tout SF dans
+# CONSIGNMENT :
+#   - PL (casiers consignés : Jupiler, Maes, Leffe…) relève des consignes, pas des
+#     contenants. Il était en plus absent des filtres d'encodage, ce qui rendait
+#     les 20 supports PL impossibles à encoder ;
+#   - SF 40040 / 40104 / 40204 (caisse plastique, rolls à fleurs) sont des
+#     CONTENANTS — le ticket le dit explicitement — et non des consignes bière.
+# Les autres SF (casiers bière 3xxxx) restent en CONSIGNMENT, mais ils n'arrivent
+# jamais ici : `is_return_support_code` les refuse en amont. /
+# Pickup category from the support code — see ticket #15.
 def pickup_type_for_support_code(code: str | None) -> str:
-    """Type de reprise (PickupType) déduit du code support pour créer une demande."""
+    """Type de reprise (PickupType) déduit du code support pour créer une demande.
+
+    >>> pickup_type_for_support_code("PL 00803")   # casier consigné Jupiler
+    'CONSIGNMENT'
+    >>> pickup_type_for_support_code("SF 40040")   # caisse plastique = contenant
+    'CONTAINER'
+    >>> pickup_type_for_support_code("RE 52010")   # balle carton
+    'CARDBOARD'
+    """
     if not code:
         return "CONTAINER"
     norm = _normalize_code(code)
     if norm.startswith("RE"):
         return "CARDBOARD"
-    if norm.startswith("SF"):
+    if norm in RETURN_SUPPORT_SF_CODES:
+        return "CONTAINER"
+    if norm.startswith("PL") or norm.startswith("SF"):
         return "CONSIGNMENT"
-    # CO / PA / PL et défaut
+    # CO / PA et défaut
     return "CONTAINER"

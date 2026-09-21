@@ -151,6 +151,7 @@ def require_permission(resource: str, action: str):
 async def get_authenticated_device(
     x_device_id: str = Header(..., alias="X-Device-ID"),
     x_app_version: str | None = Header(None, alias="X-App-Version"),
+    x_app_build: str | None = Header(None, alias="X-App-Build"),
     x_os_version: str | None = Header(None, alias="X-OS-Version"),
     db: AsyncSession = Depends(get_db),
 ) -> MobileDevice:
@@ -187,6 +188,14 @@ async def get_authenticated_device(
     device.last_seen_at = now
     if x_app_version:
         device.app_version = x_app_version
+    # Build natif (#14) : envoye par les apps a partir du build 15. Une valeur
+    # illisible est ignoree plutot que de casser l'authentification de l'appareil. /
+    # Native build, sent from build 15 on; an unreadable value is ignored.
+    if x_app_build:
+        try:
+            device.app_build = int(x_app_build)
+        except (TypeError, ValueError):
+            pass
     if x_os_version:
         device.os_version = x_os_version
 

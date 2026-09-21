@@ -7,7 +7,7 @@ Deux modes d'auth :
 
 import axios from 'axios'
 import { Platform } from 'react-native'
-import Constants from 'expo-constants'
+import * as Application from 'expo-application'
 import { useAuthStore } from '../stores/useAuthStore'
 import { useDeviceStore } from '../stores/useDeviceStore'
 import { API_BASE_URL } from '../constants/config'
@@ -32,8 +32,15 @@ api.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`
   }
 
-  // Tracabilite — version app + OS / Traceability — app version + OS
-  config.headers['X-App-Version'] = Constants.expoConfig?.version || '1.0.0'
+  // Tracabilite — version app + build + OS / Traceability — app version, build, OS.
+  // Ticket #14 : on remonte la version NATIVE de l'APK installe (et non
+  // `Constants.expoConfig.version`, qui decrit le bundle JS embarque), et
+  // surtout le BUILD. Les builds 11 a 14 portent tous le meme nom de version
+  // « 1.9.3 » : sans le build, le registre affichait 1.9.3 quoi qu'il arrive et
+  // personne — client compris — ne pouvait savoir si une tablette etait a jour.
+  // We now report the native app version and, above all, the build number.
+  config.headers['X-App-Version'] = Application.nativeApplicationVersion || '0.0.0'
+  config.headers['X-App-Build'] = String(Application.nativeBuildVersion ?? '')
   config.headers['X-OS-Version'] = `${Platform.OS} ${Platform.Version}`
 
   return config

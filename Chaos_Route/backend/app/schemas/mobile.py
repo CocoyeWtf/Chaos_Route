@@ -42,6 +42,9 @@ class MobileDeviceRead(BaseModel):
     is_active: bool
     registered_at: str | None = None
     app_version: str | None = None
+    # Build natif installe (#14) : app_version seul ne distingue pas les builds
+    # 11 a 14, tous nommes « 1.9.3 ». / Installed native build.
+    app_build: int | None = None
     os_version: str | None = None
     last_seen_at: str | None = None
     profile: str | None = "DRIVER"

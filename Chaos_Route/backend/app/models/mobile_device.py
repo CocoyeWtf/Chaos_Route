@@ -32,6 +32,13 @@ class MobileDevice(Base, TenantMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     registered_at: Mapped[str | None] = mapped_column(String(32))  # ISO 8601
     app_version: Mapped[str | None] = mapped_column(String(20))
+    # Ticket #14 : le NUMERO DE BUILD, seul moyen de savoir ce qui tourne
+    # reellement sur une tablette. Les builds 11 a 14 portent tous le meme
+    # app_version « 1.9.3 » : sans cette colonne, le registre affichait 1.9.3
+    # quel que soit le build installe, et aucune mise a jour n'etait verifiable.
+    # Nullable : une tablette non encore mise a jour n'envoie pas l'en-tete. /
+    # Build number — the only way to tell which build a tablet actually runs.
+    app_build: Mapped[int | None] = mapped_column(Integer)
     os_version: Mapped[str | None] = mapped_column(String(50))
     last_seen_at: Mapped[str | None] = mapped_column(String(32))  # ISO 8601
     profile: Mapped[str | None] = mapped_column(String(30), default="DRIVER")  # DRIVER, BASE_RECEPTION, INVENTORY

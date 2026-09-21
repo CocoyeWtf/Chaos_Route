@@ -7,19 +7,23 @@ import { useAuthStore } from '../stores/useAuthStore'
 import api from '../services/api'
 import { PickupLabelPrint } from '../components/pickup/PickupLabelPrint'
 import type { PickupRequest, PickupTypeEnum, SupportType } from '../types'
+import { supportMatchesPickupType } from '../utils/supportRules'
 
 const PICKUP_TYPE_OPTIONS: { value: PickupTypeEnum; label: string }[] = [
-  { value: 'CONTAINER', label: 'Contenants' },
+  { value: 'CONTAINER', label: 'Contenants / Palettes' },
   { value: 'CARDBOARD', label: 'Balles carton' },
   { value: 'MERCHANDISE', label: 'Retour marchandise' },
-  { value: 'CONSIGNMENT', label: 'Consignes bieres' },
+  { value: 'CONSIGNMENT', label: 'Casiers consignés' },
 ]
 
+/* Libellés des catégories (#15). « Casiers consignés » remplace « Consignes
+   bières » : la catégorie porte désormais les casiers PL, et le libellé reste
+   exact pour les demandes historiques sur casiers bière. */
 const PICKUP_TYPE_LABELS: Record<string, string> = {
-  CONTAINER: 'Contenants',
+  CONTAINER: 'Contenants / Palettes',
   CARDBOARD: 'Balles carton',
   MERCHANDISE: 'Retour marchandise',
-  CONSIGNMENT: 'Consignes bieres',
+  CONSIGNMENT: 'Casiers consignés',
 }
 
 const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
@@ -155,20 +159,17 @@ export default function PdvPickupRequests() {
   // Modal photo controle / Control photo modal
   const [photoModal, setPhotoModal] = useState<{ labelCode: string } | null>(null)
 
-  /* Prefixes de code par type de reprise / Code prefixes per pickup type */
-  const PICKUP_TYPE_PREFIXES: Record<string, string[]> = {
-    CONTAINER: ['PA', 'CO'],   // Palettes + Combis/Rolls
-    CARDBOARD: ['RE'],         // Balles carton/plastique
-    CONSIGNMENT: ['SF'],       // Casiers biere
-    MERCHANDISE: [],           // Pas de support type
-  }
-
-  /* Support types filtres selon le type de reprise / Filtered by pickup type */
+  /* Support types filtrés selon le type de reprise (#15) / Filtered by pickup type.
+     La table de préfixes précédente ignorait « PL » : les 20 casiers consignés
+     étaient donc impossibles à encoder, quelle que soit la catégorie choisie —
+     le serveur les autorisait, l'écran les cachait. Elle rangeait aussi les SF
+     40040/40104/40204 sous « casiers bière » alors que ce sont des contenants.
+     La règle vit désormais dans utils/supportRules, calquée sur le serveur. /
+     The previous prefix table omitted "PL", making the 20 consigned crates
+     impossible to encode; the rule now mirrors the backend. */
   const filteredSupportTypes = useMemo(() => {
     if (!pickupType) return supportTypes
-    const prefixes = PICKUP_TYPE_PREFIXES[pickupType] ?? []
-    if (prefixes.length === 0) return []
-    return supportTypes.filter((st) => prefixes.some((p) => st.code.startsWith(p)))
+    return supportTypes.filter((st) => supportMatchesPickupType(st.code, pickupType))
   }, [supportTypes, pickupType])
 
   const needsSupportType = pickupType !== 'MERCHANDISE'

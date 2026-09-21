@@ -10,6 +10,7 @@
 import * as FileSystem from 'expo-file-system/legacy'
 import * as IntentLauncher from 'expo-intent-launcher'
 import * as Application from 'expo-application'
+import * as SecureStore from 'expo-secure-store'
 import { Platform } from 'react-native'
 import { sha256 } from 'js-sha256'
 import { API_BASE_URL } from '../constants/config'
@@ -32,6 +33,40 @@ export function getLocalVersion(): string {
 
 export function getLocalBuild(): number {
   return LOCAL_BUILD
+}
+
+/* Memoire de la derniere tentative d'installation (ticket #14).
+ *
+ * L'installeur Android peut echouer sans que l'app le sache : invite refusee,
+ * autorisation « installer des applications inconnues » absente, ou signature
+ * differente de celle deja installee (Android exige alors une desinstallation).
+ * Jusqu'ici on relancait le telechargement a chaque ouverture, en silence :
+ * l'equipier voyait toujours le meme numero de version et croyait la mise a jour
+ * « disparue ». On retient donc le build vise, pour pouvoir dire au lancement
+ * suivant que la precedente tentative n'a pas abouti. /
+ * Remember the last attempted install so a silently failed update becomes visible.
+ */
+const ATTEMPT_KEY = 'update_attempt_build'
+
+export async function getAttemptedBuild(): Promise<number | null> {
+  try {
+    const v = await SecureStore.getItemAsync(ATTEMPT_KEY)
+    return v ? Number(v) : null
+  } catch {
+    return null
+  }
+}
+
+export async function rememberAttempt(build: number): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(ATTEMPT_KEY, String(build))
+  } catch { /* la tracabilite ne doit jamais bloquer la mise a jour */ }
+}
+
+export async function clearAttempt(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(ATTEMPT_KEY)
+  } catch { /* ignore */ }
 }
 
 export async function checkForUpdate(): Promise<{

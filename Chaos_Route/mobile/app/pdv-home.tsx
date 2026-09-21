@@ -10,6 +10,7 @@ import { useRouter } from 'expo-router'
 import { useAuthStore } from '../stores/useAuthStore'
 import { useDeviceStore } from '../stores/useDeviceStore'
 import { COLORS } from '../constants/config'
+import { getLocalVersion, getLocalBuild } from '../services/updateChecker'
 
 export default function PdvHomeScreen() {
   const router = useRouter()
@@ -86,6 +87,14 @@ export default function PdvHomeScreen() {
           <Text style={styles.logoutText}>Se deconnecter</Text>
         </TouchableOpacity>
       )}
+
+      {/* Version ET build installes (#14). Le nom de version ne bouge pas entre
+          deux builds : sans le build, impossible de dire au telephone ce qui
+          tourne reellement sur la tablette. / Version AND build: the version
+          name does not change between builds. */}
+      <Text style={styles.buildText}>
+        v{getLocalVersion()} (build {getLocalBuild()})
+      </Text>
     </View>
   )
 }
@@ -160,5 +169,12 @@ const styles = StyleSheet.create({
   logoutText: {
     color: COLORS.textMuted,
     fontSize: 13,
+  },
+  buildText: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    textAlign: 'center',
+    paddingBottom: 10,
+    opacity: 0.7,
   },
 })

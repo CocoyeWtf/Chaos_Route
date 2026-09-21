@@ -17,6 +17,7 @@ import {
 import { useRouter } from 'expo-router'
 import api from '../services/api'
 import { COLORS } from '../constants/config'
+import { supportMatchesPickupType } from '../constants/supportRules'
 import { useAuthStore } from '../stores/useAuthStore'
 import { useDeviceStore } from '../stores/useDeviceStore'
 import { usePrinterStore } from '../stores/usePrinterStore'
@@ -25,19 +26,12 @@ import { printRaw } from '../services/bluetoothPrint'
 type PickupType = 'CONTAINER' | 'CARDBOARD' | 'MERCHANDISE' | 'CONSIGNMENT'
 
 const PICKUP_TYPE_OPTIONS: { value: PickupType; label: string }[] = [
-  { value: 'CONTAINER', label: 'Contenants' },
+  { value: 'CONTAINER', label: 'Contenants / Palettes' },
   { value: 'CARDBOARD', label: 'Balles carton' },
-  { value: 'CONSIGNMENT', label: 'Consignes' },
+  { value: 'CONSIGNMENT', label: 'Casiers consignes' },
   // « Retour marchandise » retiré : solution pas encore développée, les PDV ne
   // doivent pas y avoir accès. / Removed: feature not developed yet.
 ]
-
-const PICKUP_TYPE_PREFIXES: Record<PickupType, string[]> = {
-  CONTAINER: ['PA', 'CO'],
-  CARDBOARD: ['RE'],
-  CONSIGNMENT: ['SF'],
-  MERCHANDISE: [],
-}
 
 interface SupportType {
   id: number
@@ -119,12 +113,14 @@ export default function PdvPickupScreen() {
     return () => { cancelled = true }
   }, [EP.formData])
 
-  // Liste filtree par type de reprise / Filtered by pickup type
+  // Liste filtree par type de reprise (#15) / Filtered by pickup type.
+  // L'ancienne table de prefixes ignorait « PL » : les 20 casiers consignes
+  // etaient impossibles a encoder, et les SF 40040/40104/40204 (des contenants)
+  // etaient ranges dans les consignes. La regle est desormais partagee et
+  // calquee sur le serveur. / The old prefix table omitted "PL".
   const filteredSupports = useMemo(() => {
     if (!pickupType) return []
-    const prefixes = PICKUP_TYPE_PREFIXES[pickupType]
-    if (prefixes.length === 0) return []
-    return supportTypes.filter((st) => prefixes.some((p) => st.code.startsWith(p)))
+    return supportTypes.filter((st) => supportMatchesPickupType(st.code, pickupType))
   }, [supportTypes, pickupType])
 
   const selectedSupport = supportTypes.find((st) => st.id === supportTypeId) || null

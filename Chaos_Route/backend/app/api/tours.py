@@ -1705,6 +1705,70 @@ async def create_tour(
                 ),
             )
 
+    # Garde anti melange de bases (#84) : un tour = UNE seule base d'origine.
+    # Un camion ne charge que sur un site, et la base est persistee sur le tour :
+    # elle fixe le lieu de chargement, les kms (calcules depuis ses coordonnees),
+    # les contrats proposes et l'export planning. Or un meme PDV est servi depuis
+    # deux bases le meme jour (SEC -> 092 Gosselies, FRAIS -> 080 Villers) : un
+    # simple clic sur sa pastille empilait les deux dans le meme tour. Decision du
+    # trafic (reponse B au ticket) : on refuse, on n'avertit pas. /
+    # Origin-base guard: one tour = one origin base (a truck loads at one site).
+    origin_base_id: int | None = None
+    if explicit_volume_ids:
+        payload_vols = (await db.execute(
+            select(Volume)
+            .options(selectinload(Volume.pdv))
+            .where(Volume.id.in_(explicit_volume_ids))
+        )).scalars().all()
+        by_origin: dict[int, list[Volume]] = {}
+        for v in payload_vols:
+            if v.base_origin_id is not None:
+                by_origin.setdefault(v.base_origin_id, []).append(v)
+
+        if by_origin:
+            base_labels = dict((await db.execute(
+                select(BaseLogistics.id, BaseLogistics.code).where(
+                    BaseLogistics.id.in_(set(by_origin) | {data.base_id})
+                )
+            )).all())
+
+            def _label(bid: int | None) -> str:
+                return base_labels.get(bid) or f"base #{bid}"
+
+            if len(by_origin) > 1:
+                details = " ; ".join(
+                    f"{_label(bid)} : "
+                    + ", ".join(
+                        sorted({(v.pdv.code if v.pdv else f"PDV #{v.pdv_id}") for v in group})
+                    )
+                    for bid, group in sorted(by_origin.items())
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Deux bases d'origine dans la meme tournee : "
+                        f"{details}. Un camion ne charge que sur un seul site : "
+                        "faites une tournee par base (elles peuvent etre confiees "
+                        "au meme chauffeur)."
+                    ),
+                )
+
+            origin_base_id = next(iter(by_origin))
+            # base_id absente (0/None) = base non encore detectee cote front : on
+            # adopte celle des volumes plutot que de refuser. / Missing base_id
+            # means "not detected yet": adopt the volumes' base instead of failing.
+            if not data.base_id:
+                data.base_id = origin_base_id
+            elif data.base_id != origin_base_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"La tournee charge a {_label(data.base_id)} mais ses volumes "
+                        f"partent de {_label(origin_base_id)}. Rechargez la page et "
+                        "reconstruisez la tournee pour repartir de la bonne base."
+                    ),
+                )
+
     if data.departure_time:
         enriched_stops, return_time, total_duration = await calculate_tour_times(
             data.departure_time, stops_input, data.base_id, db
@@ -1860,6 +1924,16 @@ async def create_tour(
         by_pdv: dict[int, list[Volume]] = {}
         for vol in all_unassigned:
             if vol.id in assigned_exact:
+                continue
+            # #84 : ne completer qu'avec des volumes de la base de chargement du
+            # tour. Sans ce filtre la reprise gloutonne rattachait au tour FRAIS
+            # de Villers le volume SEC du meme PDV parti de Gosselies. /
+            # Only top up with volumes from the tour's own loading base.
+            if (
+                data.base_id
+                and vol.base_origin_id is not None
+                and vol.base_origin_id != data.base_id
+            ):
                 continue
             by_pdv.setdefault(vol.pdv_id, []).append(vol)
 
@@ -3181,6 +3255,36 @@ async def add_tour_stop(
         ).order_by(Volume.eqp_count.desc())
     )
     available = list(vol_result.scalars().all())
+
+    # #84 : n'assigner que les volumes qui partent de la base de chargement du
+    # tour. Cet endpoint prenait TOUS les volumes libres du PDV pour la date :
+    # ajouter un PDV a un tour ordonnance de Villers y faisait entrer au passage
+    # son volume parti de Gosselies. Si le PDV n'a de volume que sur une AUTRE
+    # base, on refuse l'ajout plutot que de creer un arret sans marchandise —
+    # sauf tournee de reprise, ou l'arret n'a legitimement aucun volume. /
+    # Only attach volumes loaded at the tour's own base; refuse the stop when the
+    # PDV's volumes all belong to another base (pickup tours excepted).
+    if available:
+        off_base = [v for v in available if v.base_origin_id not in (None, tour.base_id)]
+        available = [v for v in available if v.base_origin_id in (None, tour.base_id)]
+        if off_base and not available and not tour.is_pickup_tour:
+            other_ids = {v.base_origin_id for v in off_base}
+            labels = dict((await db.execute(
+                select(BaseLogistics.id, BaseLogistics.code).where(
+                    BaseLogistics.id.in_(other_ids | {tour.base_id})
+                )
+            )).all())
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{pdv.code} n'a rien a charger a "
+                    f"{labels.get(tour.base_id) or f'base #{tour.base_id}'} : ses "
+                    f"volumes du jour partent de "
+                    f"{', '.join(sorted(labels.get(b) or f'base #{b}' for b in other_ids))}. "
+                    "Un camion ne charge que sur un seul site : placez ce point de "
+                    "vente dans une tournee au depart de cette base."
+                ),
+            )
     assigned_ids: list[int] = []
     assigned_eqp = 0.0
     for v in available:

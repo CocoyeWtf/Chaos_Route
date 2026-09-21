@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useApi } from '../../hooks/useApi'
 import { useTour } from '../../hooks/useTour'
 import { useAppStore } from '../../stores/useAppStore'
+import { useTourStore } from '../../stores/useTourStore'
 import { Group, Panel, useDefaultLayout } from 'react-resizable-panels'
 import { VehicleSelector } from './VehicleSelector'
 import { VolumePanel } from './VolumePanel'
@@ -95,6 +96,9 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   /* Température / Temperature state */
   const [selectedTemperatureType, setSelectedTemperatureType] = useState<TemperatureType | null>(null)
   const [tempUpgradeDialog, setTempUpgradeDialog] = useState<{ volume: Volume; upgradeTo: TemperatureType } | null>(null)
+
+  /* Dialog refus de mélange de bases d'origine (#84) / Origin-base conflict dialog */
+  const [baseConflictDialog, setBaseConflictDialog] = useState<{ volume: Volume; tourBaseId: number } | null>(null)
   /* Filtre température pour carte + liste volumes / Temperature filter for map + volume list */
   const [tempFilters, setTempFilters] = useState<Set<TemperatureClass>>(new Set())
   /* Filtre base d'origine (ticket #20) : différencier le lieu de départ des volumes SEC */
@@ -242,9 +246,9 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
      Auto-detected base from the volume actually added (stop.volume_id): a PDV can
      be served from two bases on the same day, so guessing by pdv_id picked the
      wrong origin base half the time. */
-  const autoBaseId = useMemo(() => {
-    if (currentStops.length === 0) return null
-    const first = currentStops[0]
+  const resolveBaseIdFromStops = useCallback((stops: TourStop[]) => {
+    if (stops.length === 0) return null
+    const first = stops[0]
     const byVolume = first.volume_id != null
       ? (volumes.find((v) => v.id === first.volume_id) ?? allVolumes.find((v) => v.id === first.volume_id))
       : undefined
@@ -253,7 +257,12 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       ?? volumes.find((v) => v.pdv_id === first.pdv_id)
       ?? allVolumes.find((v) => v.pdv_id === first.pdv_id)
     return vol?.base_origin_id ?? null
-  }, [currentStops, volumes, allVolumes])
+  }, [volumes, allVolumes])
+
+  const autoBaseId = useMemo(
+    () => resolveBaseIdFromStops(currentStops),
+    [currentStops, resolveBaseIdFromStops],
+  )
 
   /* Utiliser autoBaseId comme base effective, ou manualBaseId en mode pickup /
      Use autoBaseId as effective base, or manualBaseId in pickup mode */
@@ -385,6 +394,13 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
      la base héritée du tour précédent (#84). / Based on autoBaseId, not
      effectiveBaseId: an empty tour has nothing detected, so we must not display
      the previous tour's leftover base as if it had been detected. */
+  /* Libellé « code — nom » d'une base / Base label */
+  const baseLabel = useCallback((id: number | null | undefined) => {
+    if (id == null) return 'base inconnue'
+    const b = bases.find((b) => b.id === id)
+    return b ? `${b.code} — ${b.name}` : `base #${id}`
+  }, [bases])
+
   const autoBaseName = useMemo(() => {
     if (!autoBaseId) return null
     const b = bases.find((b) => b.id === autoBaseId)
@@ -436,6 +452,22 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
      Add volume — phase A (no vehicle) or phase C (with vehicle) */
   const handleAddVolume = (vol: Volume) => {
     if (consumedVolumeIds.has(vol.id)) return
+
+    /* Garde-fou #84 : un tour = UNE seule base d'origine (un camion ne charge que
+       sur un site). Décision du trafic (réponse B) : on empêche, on n'avertit pas.
+       La base du tour est relue dans le store et non via `autoBaseId` : quand on
+       clique la pastille d'un PDV multi-températures, les volumes sont ajoutés
+       dans une boucle synchrone, et le mémo calculé au rendu précédent verrait
+       encore un tour vide — c'est exactement ce chemin qui mélangeait SEC
+       (Gosselies 092) et FRAIS (Villers 080). /
+       Guard: one tour = one origin base. The tour base is re-read from the store,
+       not from the `autoBaseId` memo, because volumes are added in a synchronous
+       loop where that memo would still see the previous render's stops. */
+    const tourBaseId = resolveBaseIdFromStops(useTourStore.getState().currentStops)
+    if (tourBaseId != null && vol.base_origin_id != null && vol.base_origin_id !== tourBaseId) {
+      setBaseConflictDialog({ volume: vol, tourBaseId })
+      return
+    }
 
     /* Phase A : pas de véhicule → ajout libre / Phase A: no vehicle → free add */
     if (!selectedVehicleType) {
@@ -1845,6 +1877,38 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                 {t('common.cancel')}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refus : deux bases d'origine dans un seul tour (#84) /
+          Refusal: two origin bases in a single tour */}
+      {baseConflictDialog && (
+        <div className="fixed inset-0 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 9999 }}>
+          <div
+            className="rounded-xl border shadow-2xl p-6 w-[420px] space-y-4"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+          >
+            <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+              Deux bases d'origine dans le même tour
+            </h3>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Ce volume part de <strong>{baseLabel(baseConflictDialog.volume.base_origin_id)}</strong>,
+              alors que le tour en cours charge à <strong>{baseLabel(baseConflictDialog.tourBaseId)}</strong>.
+            </p>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Un camion ne charge que sur un seul site : ce volume n'a pas été ajouté.
+              Enregistrez ce tour, puis construisez-en un second depuis l'autre base —
+              il peut être confié au même chauffeur ou au même tractionnaire.
+            </p>
+
+            <button
+              className="w-full px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+              style={{ backgroundColor: 'var(--color-primary)', color: '#fff' }}
+              onClick={() => setBaseConflictDialog(null)}
+            >
+              J'ai compris
+            </button>
           </div>
         </div>
       )}

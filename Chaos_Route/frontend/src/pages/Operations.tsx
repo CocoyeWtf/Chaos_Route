@@ -58,6 +58,8 @@ const ALL_COLUMNS: OpsCol[] = [
   // Heure à laquelle la semi est disponible au chargement, saisie par le postier
   // dans la tournée (#44) : elle n'était lisible qu'en dépliant la tournée.
   { key: 'trailer_ready', label: 'Dispo semi', defaultWidth: 105, align: 'center' },
+  // État du chargement (#45), déduit des heures saisies par le postier.
+  { key: 'loading_state', label: 'Chargement', defaultWidth: 95, align: 'center' },
   { key: 'delay', label: 'operations.delay', defaultWidth: 75, align: 'center' },
   { key: 'exit', label: 'operations.barrierExit', defaultWidth: 60, align: 'center' },
 ]
@@ -1068,6 +1070,40 @@ function TourRow({
     ? `${contract.vehicle_code} — ${contract.vehicle_name ?? ''}`
     : (contract?.code ?? '—')
 
+  /* État du chargement (#45) et couleur de préparation (#46).
+
+     Les deux se lisent sur des données déjà saisies ailleurs :
+     - la PRÉPARATION vient des volumes (heure de fin de préparation) ;
+     - « ZUR à quai » est l'heure de disponibilité de la semi, saisie par le
+       postier dans la tournée ;
+     - le CHARGEMENT est terminé quand l'heure de fin de chargement est posée.
+
+     Tant que ces heures ne sont pas renseignées, l'état reste « à charger » et
+     la ligne reste rouge : c'est fidèle, l'application ne peut pas inventer une
+     préparation qu'on ne lui a pas déclarée. /
+     Loading state and preparation colour, derived from times entered elsewhere. */
+  const tourVolumes = volumes.filter((v) => v.tour_id === tour.id)
+  const prepDone = tourVolumes.length > 0 && tourVolumes.every((v) => !!v.preparation_end)
+  const trailerAtDock = !!tour.trailer_ready_time
+  const loadingDone = !!tour.loading_end_time
+
+  const loadingState: { label: string; color: string } = loadingDone
+    ? { label: 'Chargé', color: 'var(--color-success)' }
+    : trailerAtDock
+      ? { label: 'En cours', color: 'var(--color-warning)' }
+      : { label: 'À charger', color: 'var(--text-muted)' }
+
+  /* Vert : prêt à charger. Jaune : semi à quai mais préparation en retard.
+     Bleu : préparation finie, on attend la semi. Rouge : rien n'est prêt. */
+  const prepColor = prepDone
+    ? (trailerAtDock ? '#22c55e' : '#3b82f6')
+    : (trailerAtDock ? '#eab308' : '#ef4444')
+  const prepLabel = prepDone
+    ? (trailerAtDock ? 'Préparation finie, semi à quai — prêt à charger'
+                     : 'Préparation finie, semi pas encore à quai')
+    : (trailerAtDock ? 'Semi à quai, préparation pas terminée'
+                     : 'Ni la préparation ni la semi ne sont prêtes')
+
   /* Une tournée reste modifiable jusqu'au top départ (#37) : c'est la règle que
      le serveur applique, l'écran s'y aligne au lieu de figer plus tôt. /
      A tour stays editable until the departure signal — same rule as the server. */
@@ -1153,6 +1189,12 @@ function TourRow({
         {displayDateTime(tour.trailer_ready_time)}
       </span>
     ),
+    loading_state: (
+      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+        style={{ backgroundColor: `${loadingState.color}22`, color: loadingState.color }}>
+        {loadingState.label}
+      </span>
+    ),
     delay: <DelayBadge delay={tour.delay_minutes} color={color} t={t} />,
     exit: <span className="font-mono text-xs" style={{ color: tour.barrier_exit_time ? 'var(--text-primary)' : 'var(--text-muted)' }}>{displayDateTime(tour.barrier_exit_time)}</span>,
   }
@@ -1161,7 +1203,13 @@ function TourRow({
     <>
       <tr
         className="border-t cursor-pointer transition-colors"
-        style={{ borderColor: 'var(--border-color)', backgroundColor: isExpanded ? 'rgba(249,115,22,0.06)' : undefined }}
+        style={{
+          borderColor: 'var(--border-color)',
+          backgroundColor: isExpanded ? 'rgba(249,115,22,0.06)' : undefined,
+          /* Code couleur de l'état de préparation (#46) — voir prepColor. */
+          borderLeft: `4px solid ${prepColor}`,
+        }}
+        title={prepLabel}
         onClick={onToggle}
         onMouseEnter={(e) => { if (!isExpanded) e.currentTarget.style.backgroundColor = 'var(--bg-hover)' }}
         onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = isExpanded ? 'rgba(249,115,22,0.06)' : 'transparent' }}

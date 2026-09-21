@@ -199,6 +199,9 @@ export interface Tour {
   id: number
   /* Base de retour si elle diffère de la base de départ (#64) ; null = même base. */
   return_base_id?: number | null
+  /* Enlèvement fournisseur en fin de tournée, avant retour base (#74). */
+  final_pickup_supplier_id?: number | null
+  final_pickup_duration_minutes?: number | null
   date: string
   code: string
   vehicle_type?: VehicleType

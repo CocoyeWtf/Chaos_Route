@@ -30,6 +30,7 @@ from app.models.user import User
 from app.models.pickup_request import PickupRequest, PickupLabel, PickupStatus, PickupType, LabelStatus
 from app.models.vehicle import Vehicle, FleetVehicleType, VehicleStatus
 from app.models.tour_manifest_line import TourManifestLine
+from app.models.supplier import Supplier
 from app.schemas.tour import ManifestLineRead, ReorderStopsRequest, TourCreate, TourGateUpdate, TourOperationsUpdate, TourRead, TourSchedule, TourStopInsert, TourStopRaq, TourStopUpdate, TourUpdate
 from app.api.deps import require_permission, get_user_region_ids
 from app.utils.fuel_pricing import load_fuel_unit_prices, price_for_contract, contract_fuel_type
@@ -145,6 +146,8 @@ async def calculate_tour_times(
     base_id: int,
     db: AsyncSession,
     return_base_id: int | None = None,
+    final_pickup_supplier_id: int | None = None,
+    final_pickup_duration_minutes: int | None = None,
 ) -> tuple[list[dict], str, int]:
     """
     Calculer les temps à chaque arrêt / Calculate times at each stop.
@@ -154,6 +157,10 @@ async def calculate_tour_times(
     calculé vers la base de départ, et l'agent trafic devait décaler à la main le
     départ de la tournée suivante pour absorber le trajet base-base. /
     Return base when it differs from the departure base.
+
+    `final_pickup_supplier_id` : enlèvement fournisseur après le dernier PDV et
+    avant le retour base (#74). Le trajet devient PDV → fournisseur → base, et le
+    temps sur place s'ajoute. / Final supplier pickup inserted before the return.
 
     Returns: (enriched_stops, return_time, total_duration_minutes)
     """
@@ -204,8 +211,17 @@ async def calculate_tour_times(
 
     if enriched:
         last_pdv_id = enriched[-1]["pdv_id"]
-        return_dist = await _get_distance(db, "PDV", last_pdv_id, "BASE", ret_base_id)
-        return_minutes = return_dist.duration_minutes if return_dist else 0
+        return_minutes = 0
+        if final_pickup_supplier_id:
+            # Détour par le fournisseur, puis retour depuis chez lui (#74).
+            to_sup = await _get_distance(db, "PDV", last_pdv_id, "SUPPLIER", final_pickup_supplier_id)
+            from_sup = await _get_distance(db, "SUPPLIER", final_pickup_supplier_id, "BASE", ret_base_id)
+            return_minutes += to_sup.duration_minutes if to_sup else 0
+            return_minutes += final_pickup_duration_minutes or default_dock
+            return_minutes += from_sup.duration_minutes if from_sup else 0
+        else:
+            return_dist = await _get_distance(db, "PDV", last_pdv_id, "BASE", ret_base_id)
+            return_minutes = return_dist.duration_minutes if return_dist else 0
         return_dt = current_time + timedelta(minutes=return_minutes)
         return_time = _format_time(return_dt)
     else:
@@ -222,6 +238,7 @@ async def calculate_tour_times(
 
 def _build_segments(
     base_id: int, stops: list[dict], return_base_id: int | None = None,
+    final_pickup_supplier_id: int | None = None,
 ) -> list[tuple[str, int, str, int]]:
     """Construire la liste des segments du tour / Build list of tour segments.
 
@@ -241,8 +258,40 @@ def _build_segments(
         prev_type = "PDV"
         prev_id = pdv_id
     if sorted_stops:
-        segments.append(("PDV", sorted_stops[-1]["pdv_id"], "BASE", return_base_id or base_id))
+        ret_base = return_base_id or base_id
+        if final_pickup_supplier_id:
+            # L'enlèvement de fin (#74) coupe le dernier trajet en deux segments :
+            # la taxe km se lit par segment, elle doit suivre le détour.
+            segments.append(("PDV", sorted_stops[-1]["pdv_id"], "SUPPLIER", final_pickup_supplier_id))
+            segments.append(("SUPPLIER", final_pickup_supplier_id, "BASE", ret_base))
+        else:
+            segments.append(("PDV", sorted_stops[-1]["pdv_id"], "BASE", ret_base))
     return segments
+
+
+async def _km_after_last_stop(
+    db: AsyncSession,
+    last_pdv_id: int,
+    base_id: int,
+    return_base_id: int | None = None,
+    final_pickup_supplier_id: int | None = None,
+) -> float:
+    """Kilomètres parcourus après le dernier PDV : retour base, éventuellement
+    via un enlèvement fournisseur (#74) et vers une autre base (#64).
+
+    Cette fin de tournée se calculait à cinq endroits différents ; elle n'a plus
+    qu'une seule écriture, sans quoi chaque nouvelle règle devrait être reportée
+    cinq fois. / The tail of a tour, computed in one place.
+    """
+    ret_base = return_base_id or base_id
+    if final_pickup_supplier_id:
+        to_sup = await _get_distance(db, "PDV", last_pdv_id, "SUPPLIER", final_pickup_supplier_id)
+        from_sup = await _get_distance(db, "SUPPLIER", final_pickup_supplier_id, "BASE", ret_base)
+        return (float(to_sup.distance_km) if to_sup else 0.0) + (
+            float(from_sup.distance_km) if from_sup else 0.0
+        )
+    dist = await _get_distance(db, "PDV", last_pdv_id, "BASE", ret_base)
+    return float(dist.distance_km) if dist else 0.0
 
 
 async def _calculate_cost(
@@ -254,6 +303,7 @@ async def _calculate_cost(
     stops: list[dict],
     own_trailer: bool = False,
     return_base_id: int | None = None,
+    final_pickup_supplier_id: int | None = None,
 ) -> tuple[float, list[str]]:
     """Calculer le coût du tour / Calculate tour cost.
 
@@ -320,7 +370,7 @@ async def _calculate_cost(
     # 3. Taxe km (montant forfaitaire par segment, pas un taux/km)
     # Km tax (flat amount per segment, not a rate per km)
     km_tax_total = 0.0
-    segments = _build_segments(tour_base_id, stops, return_base_id)
+    segments = _build_segments(tour_base_id, stops, return_base_id, final_pickup_supplier_id)
     for seg in segments:
         tax_entry = await db.scalar(
             select(KmTax.tax_per_km).where(
@@ -367,6 +417,7 @@ async def _recalculate_sibling_tours(
             db, float(tour.total_km or 0), contract, tour.date, tour.base_id, stops_data,
             own_trailer=bool(getattr(tour, "vehicle_id", None)),
             return_base_id=tour.return_base_id,
+            final_pickup_supplier_id=tour.final_pickup_supplier_id,
         )
         if tour.total_cost != new_cost:
             tour.total_cost = new_cost
@@ -768,7 +819,7 @@ async def _build_cmro_rows(db, date_from, date_to, base_id, transporter_name, us
             for s in sorted(t.stops, key=lambda s: s.sequence_order)
         ]
         km_tax_total = 0.0
-        for seg in _build_segments(t.base_id, stops_data, t.return_base_id):
+        for seg in _build_segments(t.base_id, stops_data, t.return_base_id, t.final_pickup_supplier_id):
             tax = await db.scalar(select(KmTax.tax_per_km).where(
                 KmTax.origin_type == seg[0], KmTax.origin_id == seg[1],
                 KmTax.destination_type == seg[2], KmTax.destination_id == seg[3],
@@ -1191,7 +1242,7 @@ async def transporter_summary(
             {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
             for s in sorted(tour.stops, key=lambda s: s.sequence_order)
         ]
-        segments = _build_segments(tour.base_id, stops_data, tour.return_base_id)
+        segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id)
         km_tax_total = 0.0
         for seg in segments:
             tax_entry = await db.scalar(
@@ -1212,8 +1263,17 @@ async def transporter_summary(
         # Calcul time_breakdown / Time breakdown calculation
         tb_travel = sum(s.duration_from_previous_minutes or 0 for s in sorted_stops)
         if sorted_stops:
-            return_dist = await _get_distance(db, "PDV", sorted_stops[-1].pdv_id, "BASE", return_base_of(tour))
-            tb_travel += return_dist.duration_minutes if return_dist else 0
+            # La fin de tournée peut passer par un enlèvement fournisseur (#74)
+            # et viser une autre base (#64) : on additionne les segments réels.
+            # / The tail may route through a supplier and target another base.
+            for seg in _build_segments(
+                tour.base_id,
+                [{"pdv_id": st.pdv_id, "sequence_order": st.sequence_order, "eqp_count": st.eqp_count}
+                 for st in sorted_stops],
+                tour.return_base_id, tour.final_pickup_supplier_id,
+            )[len(sorted_stops):]:
+                leg = await _get_distance(db, seg[0], seg[1], seg[2], seg[3])
+                tb_travel += leg.duration_minutes if leg else 0
         tb_dock = sum(
             (pdvs_map[s.pdv_id].dock_time_minutes if s.pdv_id in pdvs_map and pdvs_map[s.pdv_id].dock_time_minutes else default_dock)
             for s in sorted_stops
@@ -1441,13 +1501,17 @@ async def get_tour_time_breakdown(
     base = await db.get(BaseLogistics, tour.base_id)
     ret_base = await db.get(BaseLogistics, tour.return_base_id) if tour.return_base_id else base
     base_names = {tour.base_id: base, return_base_of(tour): ret_base}
+    fin_sup = (
+        await db.get(Supplier, tour.final_pickup_supplier_id)
+        if tour.final_pickup_supplier_id else None
+    )
 
     # Construire les segments et stops / Build segments and stops
     stops_data = [
         {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
         for s in sorted_stops
     ]
-    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id)
+    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id)
 
     segment_details = []
     total_travel = 0
@@ -1460,11 +1524,15 @@ async def get_tour_time_breakdown(
         # du segment, pas systématiquement celle de départ. / Name the leg's own base.
         if seg[0] == "BASE" and base_names.get(seg[1]):
             origin_label = base_names[seg[1]].name
+        elif seg[0] == "SUPPLIER":
+            origin_label = fin_sup.name if fin_sup else f"#{seg[1]}"
         else:
             pdv = pdv_map.get(seg[1])
             origin_label = f"{pdv.code} {pdv.name}" if pdv else f"#{seg[1]}"
         if seg[2] == "BASE" and base_names.get(seg[3]):
             dest_label = base_names[seg[3]].name
+        elif seg[2] == "SUPPLIER":
+            dest_label = fin_sup.name if fin_sup else f"#{seg[3]}"
         else:
             pdv = pdv_map.get(seg[3])
             dest_label = f"{pdv.code} {pdv.name}" if pdv else f"#{seg[3]}"
@@ -1854,9 +1922,25 @@ async def create_tour(
     if data.return_base_id and not await db.get(BaseLogistics, data.return_base_id):
         raise HTTPException(status_code=422, detail="Base de retour introuvable")
 
+    # Enlèvement fournisseur de fin (#74) : il n'a de sens qu'après un arrêt de
+    # livraison. Sans PDV, c'est un enlèvement dédié, qui a déjà sa nature.
+    # / A final pickup only makes sense after a delivery stop.
+    if data.final_pickup_supplier_id:
+        if not await db.get(Supplier, data.final_pickup_supplier_id):
+            raise HTTPException(status_code=422, detail="Fournisseur d'enlèvement introuvable")
+        if not stops_input:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Un enlèvement de fin de tournée suppose une tournée de livraison. "
+                    "Pour un enlèvement seul, utilisez la nature « Enlèvement dédié »."
+                ),
+            )
+
     if data.departure_time:
         enriched_stops, return_time, total_duration = await calculate_tour_times(
-            data.departure_time, stops_input, data.base_id, db, data.return_base_id
+            data.departure_time, stops_input, data.base_id, db, data.return_base_id,
+            data.final_pickup_supplier_id, data.final_pickup_duration_minutes,
         )
     else:
         enriched_stops = stops_input
@@ -1896,9 +1980,10 @@ async def create_tour(
         total_km = sum(s.get("distance_from_previous_km", 0) for s in enriched_stops)
         if enriched_stops:
             last_pdv_id = enriched_stops[-1]["pdv_id"]
-            return_dist = await _get_distance(db, "PDV", last_pdv_id, "BASE", data.return_base_id or data.base_id)
-            if return_dist:
-                total_km += float(return_dist.distance_km)
+            total_km += await _km_after_last_stop(
+                db, last_pdv_id, data.base_id, data.return_base_id,
+                data.final_pickup_supplier_id,
+            )
         total_km = round(total_km, 2)
     elif data.supplier_id and not enriched_stops:
         # Enlèvement dédié : aller-retour base ↔ fournisseur depuis le distancier /
@@ -1931,6 +2016,8 @@ async def create_tour(
         status=data.status,
         base_id=data.base_id,
         return_base_id=data.return_base_id,
+        final_pickup_supplier_id=data.final_pickup_supplier_id,
+        final_pickup_duration_minutes=data.final_pickup_duration_minutes,
         temperature_type=data.temperature_type,
         is_pickup_tour=is_pickup,
         tour_type=tour_type,
@@ -1949,6 +2036,7 @@ async def create_tour(
             db, total_km, contract, data.date, data.base_id, stops_input,
             own_trailer=bool(getattr(data, "vehicle_id", None)),
             return_base_id=data.return_base_id,
+            final_pickup_supplier_id=data.final_pickup_supplier_id,
         )
 
     pdv_ids = []
@@ -2113,13 +2201,34 @@ async def schedule_tour(
         else:
             tour.return_base_id = None
 
+    # Enlèvement fournisseur de fin de tournée (#74) : il se décide en même temps
+    # que le reste de l'attribution, donc avant les calculs qui en dépendent.
+    if "final_pickup_supplier_id" in data.model_fields_set:
+        if data.final_pickup_supplier_id:
+            if not await db.get(Supplier, data.final_pickup_supplier_id):
+                raise HTTPException(status_code=422, detail="Fournisseur d'enlèvement introuvable")
+            if not tour.stops:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Un enlèvement de fin de tournée suppose une tournée de livraison. "
+                        "Pour un enlèvement seul, utilisez la nature « Enlèvement dédié »."
+                    ),
+                )
+            tour.final_pickup_supplier_id = data.final_pickup_supplier_id
+            tour.final_pickup_duration_minutes = data.final_pickup_duration_minutes
+        else:
+            tour.final_pickup_supplier_id = None
+            tour.final_pickup_duration_minutes = None
+
     stops_data = [
         {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
         for s in sorted(tour.stops, key=lambda s: s.sequence_order)
     ]
 
     enriched_stops, return_time, total_duration = await calculate_tour_times(
-        data.departure_time, stops_data, tour.base_id, db, tour.return_base_id
+        data.departure_time, stops_data, tour.base_id, db, tour.return_base_id,
+        tour.final_pickup_supplier_id, tour.final_pickup_duration_minutes,
     )
 
     # ── Validation véhicule propre / Own vehicle validation ──────────────────
@@ -2298,9 +2407,10 @@ async def schedule_tour(
     total_km = sum(s.get("distance_from_previous_km", 0) for s in enriched_stops)
     if enriched_stops:
         last_pdv_id = enriched_stops[-1]["pdv_id"]
-        return_dist = await _get_distance(db, "PDV", last_pdv_id, "BASE", return_base_of(tour))
-        if return_dist:
-            total_km += float(return_dist.distance_km)
+        total_km += await _km_after_last_stop(
+            db, last_pdv_id, tour.base_id, tour.return_base_id,
+            tour.final_pickup_supplier_id,
+        )
     total_km = round(total_km, 2)
 
     tour.contract_id = data.contract_id
@@ -2327,6 +2437,7 @@ async def schedule_tour(
             db, total_km, contract, tour.date, tour.base_id, stops_data,
             own_trailer=bool(getattr(tour, "vehicle_id", None)),
             return_base_id=tour.return_base_id,
+            final_pickup_supplier_id=tour.final_pickup_supplier_id,
         )
         tour.total_cost = total_cost
     else:
@@ -2400,14 +2511,16 @@ async def reorder_tour_stops(
             for s in sorted(tour.stops, key=lambda s: s.sequence_order)
         ]
         enriched_stops, return_time, total_duration = await calculate_tour_times(
-            tour.departure_time, stops_data, tour.base_id, db, tour.return_base_id
+            tour.departure_time, stops_data, tour.base_id, db, tour.return_base_id,
+            tour.final_pickup_supplier_id, tour.final_pickup_duration_minutes,
         )
         total_km = sum(s.get("distance_from_previous_km", 0) for s in enriched_stops)
         if enriched_stops:
             last_pdv_id = enriched_stops[-1]["pdv_id"]
-            return_dist = await _get_distance(db, "PDV", last_pdv_id, "BASE", return_base_of(tour))
-            if return_dist:
-                total_km += float(return_dist.distance_km)
+            total_km += await _km_after_last_stop(
+                db, last_pdv_id, tour.base_id, tour.return_base_id,
+                tour.final_pickup_supplier_id,
+            )
         tour.return_time = return_time
         tour.total_km = round(total_km, 2)
         tour.total_duration_minutes = total_duration
@@ -2429,6 +2542,7 @@ async def reorder_tour_stops(
                     db, tour.total_km, contract, tour.date, tour.base_id, stops_data,
                     own_trailer=bool(getattr(tour, "vehicle_id", None)),
                     return_base_id=tour.return_base_id,
+                    final_pickup_supplier_id=tour.final_pickup_supplier_id,
                 )
 
     await _log_audit(db, "tour", tour.id, "REORDER_STOPS", user, {"stop_order": data.stop_order})
@@ -2936,7 +3050,7 @@ async def get_tour_cost_breakdown(
         {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
         for s in sorted(tour.stops, key=lambda s: s.sequence_order)
     ]
-    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id)
+    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id)
 
     # Charger les noms des PDV et bases / Load PDV and base names
     pdv_ids = list({s.pdv_id for s in tour.stops})
@@ -2945,6 +3059,10 @@ async def get_tour_cost_breakdown(
     base = await db.get(BaseLogistics, tour.base_id)
     ret_base = await db.get(BaseLogistics, tour.return_base_id) if tour.return_base_id else base
     base_names = {tour.base_id: base, return_base_of(tour): ret_base}
+    fin_sup = (
+        await db.get(Supplier, tour.final_pickup_supplier_id)
+        if tour.final_pickup_supplier_id else None
+    )
 
     segment_details = []
     km_tax_total = 0.0
@@ -2965,11 +3083,15 @@ async def get_tour_cost_breakdown(
         # du segment, pas systématiquement celle de départ. / Name the leg's own base.
         if seg[0] == "BASE" and base_names.get(seg[1]):
             origin_label = base_names[seg[1]].name
+        elif seg[0] == "SUPPLIER":
+            origin_label = fin_sup.name if fin_sup else f"#{seg[1]}"
         else:
             pdv = pdv_map.get(seg[1])
             origin_label = f"{pdv.code} {pdv.name}" if pdv else f"#{seg[1]}"
         if seg[2] == "BASE" and base_names.get(seg[3]):
             dest_label = base_names[seg[3]].name
+        elif seg[2] == "SUPPLIER":
+            dest_label = fin_sup.name if fin_sup else f"#{seg[3]}"
         else:
             pdv = pdv_map.get(seg[3])
             dest_label = f"{pdv.code} {pdv.name}" if pdv else f"#{seg[3]}"
@@ -3121,6 +3243,7 @@ async def recalculate_tour_costs(
             db, float(tour.total_km or 0), contract, tour.date, tour.base_id, stops_data,
             own_trailer=bool(getattr(tour, "vehicle_id", None)),
             return_base_id=tour.return_base_id,
+            final_pickup_supplier_id=tour.final_pickup_supplier_id,
         )
         if old_cost != new_cost:
             tour.total_cost = new_cost
@@ -3217,6 +3340,7 @@ async def _recalc_tour_after_stop_change(db: AsyncSession, tour: Tour) -> dict:
 
     enriched, return_time, total_duration = await calculate_tour_times(
         tour.departure_time, stops_data, tour.base_id, db, tour.return_base_id,
+        tour.final_pickup_supplier_id, tour.final_pickup_duration_minutes,
     )
 
     tour.return_time = return_time
@@ -3227,8 +3351,10 @@ async def _recalc_tour_after_stop_change(db: AsyncSession, tour: Tour) -> dict:
     # Ajouter le retour base / Add return leg
     last_pdv_id = enriched[-1]["pdv_id"] if enriched else None
     if last_pdv_id:
-        ret_dist = await _get_distance(db, "PDV", last_pdv_id, "BASE", return_base_of(tour))
-        total_km += float(ret_dist.distance_km) if ret_dist else 0
+        total_km += await _km_after_last_stop(
+            db, last_pdv_id, tour.base_id, tour.return_base_id,
+            tour.final_pickup_supplier_id,
+        )
     tour.total_km = round(total_km, 2)
 
     # Mettre à jour chaque stop / Update each stop
@@ -3249,6 +3375,7 @@ async def _recalc_tour_after_stop_change(db: AsyncSession, tour: Tour) -> dict:
                 db, tour.total_km, contract, tour.date, tour.base_id, stops_data,
                 own_trailer=bool(getattr(tour, "vehicle_id", None)),
                 return_base_id=tour.return_base_id,
+                final_pickup_supplier_id=tour.final_pickup_supplier_id,
             )
             tour.total_cost = round(cost, 2)
             warnings.extend(cost_warnings)

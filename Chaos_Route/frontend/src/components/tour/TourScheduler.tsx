@@ -13,7 +13,7 @@ import { VEHICLE_TYPE_DEFAULTS, TEMPERATURE_TYPE_LABELS, TEMPERATURE_COLORS, TOU
 import api, { downloadPostierPlanning } from '../../services/api'
 import { CostBreakdown } from './CostBreakdown'
 import { TransporterConfirmationModal, type ConfirmTransporter } from './TransporterConfirmationModal'
-import type { Tour, BaseLogistics, Contract, DistanceEntry, PDV, VehicleType, TemperatureType, TemperatureClass, Volume, Vehicle, AssignmentMode, AvailableVehicle } from '../../types'
+import type { Tour, BaseLogistics, Contract, DistanceEntry, PDV, VehicleType, TemperatureType, TemperatureClass, Volume, Vehicle, AssignmentMode, AvailableVehicle, Supplier } from '../../types'
 
 /* Filtres activité / Activity filter options */
 const ACTIVITY_FILTERS: { key: string; label: string }[] = [
@@ -121,6 +121,8 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
 
   const regionParams = selectedRegionId ? { region_id: selectedRegionId } : undefined
   const { data: bases } = useApi<BaseLogistics>('/bases', regionParams)
+  /* Fournisseurs : référentiel de l'enlèvement de fin de tournée (#74). */
+  const { data: suppliers } = useApi<Supplier>('/suppliers', regionParams)
   const { data: allContracts } = useApi<Contract>('/contracts', regionParams)
   const { data: distances } = useApi<DistanceEntry>('/distance-matrix')
   const { data: pdvs } = useApi<PDV>('/pdvs', regionParams)
@@ -155,8 +157,10 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     priority: number | null
     /* Base de retour quand elle diffère du départ (#64) ; null = même base. */
     returnBaseId: number | null
+    /* Enlèvement fournisseur en fin de tournée (#74) ; null = aucun. */
+    finalPickupSupplierId: number | null
   }
-  const EMPTY_INPUT: ScheduleInput = { time: '', deliveryDate: '', mode: 'preste', contractId: null, vehicleId: null, tractorId: null, driverName: '', priority: null, returnBaseId: null }
+  const EMPTY_INPUT: ScheduleInput = { time: '', deliveryDate: '', mode: 'preste', contractId: null, vehicleId: null, tractorId: null, driverName: '', priority: null, returnBaseId: null, finalPickupSupplierId: null }
 
   const [tours, setTours] = useState<Tour[]>([])
   const [timeline, setTimeline] = useState<GanttTour[]>([])
@@ -768,6 +772,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
         driverName: tour.driver_name ?? '',
         priority: tour.priority ?? null,
         returnBaseId: tour.return_base_id ?? null,
+        finalPickupSupplierId: tour.final_pickup_supplier_id ?? null,
       },
     }))
     loadContractsForTour(tour, tour.delivery_date ?? undefined)
@@ -803,6 +808,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
         driver_code_infolog: matchedDriver?.code_infolog ?? null,
         priority: input.priority ?? null,
         return_base_id: input.returnBaseId ?? null,
+        final_pickup_supplier_id: input.finalPickupSupplierId ?? null,
       }, { params: force ? { force: true } : undefined })
       await loadData()
       setEditingTourId(null)
@@ -998,7 +1004,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
 
   const updateInput = (
     tourId: number,
-    field: 'time' | 'contractId' | 'deliveryDate' | 'mode' | 'vehicleId' | 'tractorId' | 'driverName' | 'priority' | 'returnBaseId',
+    field: 'time' | 'contractId' | 'deliveryDate' | 'mode' | 'vehicleId' | 'tractorId' | 'driverName' | 'priority' | 'returnBaseId' | 'finalPickupSupplierId',
     value: string | number | null
   ) => {
     setScheduleInputs((prev) => {
@@ -2281,6 +2287,30 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                             style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                           />
 
+                          {/* Enlèvement fournisseur de fin de tournée (#74) : le camion
+                              livre ses PDV, pousse chez Avion ou Saint-Feuillien, puis
+                              rentre. Le détour s'ajoute au trajet de retour — km, horaire
+                              et taxe — au lieu d'obliger à créer un second document. /
+                              Final supplier pickup inserted before the return leg. */}
+                          <select
+                            value={input.finalPickupSupplierId ?? ''}
+                            onChange={(e) => updateInput(tour.id, 'finalPickupSupplierId', e.target.value ? Number(e.target.value) : null)}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Enlèvement chez un fournisseur en fin de tournée, avant le retour base"
+                            className="rounded border px-1.5 py-1 text-[11px] min-w-0 shrink-0"
+                            style={{
+                              backgroundColor: 'var(--bg-primary)',
+                              borderColor: input.finalPickupSupplierId ? 'var(--color-warning)' : 'var(--border-color)',
+                              color: 'var(--text-primary)',
+                              maxWidth: '150px',
+                            }}
+                          >
+                            <option value="">Sans enlèvement</option>
+                            {suppliers.map((sup) => (
+                              <option key={sup.id} value={sup.id}>Enlèv. {sup.name}</option>
+                            ))}
+                          </select>
+
                           {/* Base de retour (#64) : un chauffeur parti de Villers peut
                               recharger à Trazegnies et y terminer. Laisser « Retour
                               départ » garde le calcul actuel ; choisir une autre base
@@ -2380,6 +2410,15 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                           {/* Le top départ est validé : plus rien n'est modifiable, mais
                               une fin sur une autre base doit rester visible (#64). /
                               Once departure is signed off, still show a different return base. */}
+                          {tour.final_pickup_supplier_id && (
+                            <span
+                              className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"
+                              title="Enlèvement fournisseur en fin de tournée, avant retour base"
+                              style={{ backgroundColor: 'rgba(234,179,8,0.15)', color: 'var(--color-warning)' }}
+                            >
+                              ⇪ {suppliers.find((sup) => sup.id === tour.final_pickup_supplier_id)?.name ?? tour.final_pickup_supplier_id}
+                            </span>
+                          )}
                           {tour.return_base_id && tour.return_base_id !== tour.base_id && (
                             <span
                               className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"

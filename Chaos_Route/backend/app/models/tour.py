@@ -90,6 +90,19 @@ class Tour(Base, TenantMixin):
     return_base_id: Mapped[int | None] = mapped_column(
         ForeignKey("bases_logistics.id"), nullable=True
     )
+    # Enlèvement fournisseur en fin de tournée de livraison (#74) : le camion
+    # livre ses PDV, pousse chez Avion ou Saint-Feuillien, puis rentre. Ce
+    # n'est pas un enlèvement dédié (celui-là part à vide de la base) et ce
+    # n'est pas un arrêt de livraison : aucun volume, aucun EQC. On le porte
+    # sur la tournée plutôt qu'en arrêt, parce qu'il se place toujours après
+    # le dernier PDV et avant le retour. / Final supplier pickup on a delivery
+    # tour: no volumes, always between the last PDV and the return leg.
+    final_pickup_supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("suppliers.id"), nullable=True
+    )
+    # Temps sur place chez le fournisseur. NULL = temps de quai par défaut :
+    # un chargement chez Avion et un chez Bister ne durent pas pareil.
+    final_pickup_duration_minutes: Mapped[int | None] = mapped_column(Integer)
     delivery_date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD — date de livraison
     temperature_type: Mapped[str | None] = mapped_column(String(10))  # SEC|FRAIS|GEL|BI_TEMP|TRI_TEMP
     is_pickup_tour: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -165,6 +178,9 @@ class Tour(Base, TenantMixin):
     vehicle: Mapped["Vehicle | None"] = relationship(foreign_keys=[vehicle_id])
     tractor: Mapped["Vehicle | None"] = relationship(foreign_keys=[tractor_id])
     supplier: Mapped["Supplier | None"] = relationship(foreign_keys=[supplier_id])
+    final_pickup_supplier: Mapped["Supplier | None"] = relationship(
+        foreign_keys=[final_pickup_supplier_id]
+    )
     stops: Mapped[list["TourStop"]] = relationship(
         back_populates="tour", cascade="all, delete-orphan", order_by="TourStop.sequence_order"
     )

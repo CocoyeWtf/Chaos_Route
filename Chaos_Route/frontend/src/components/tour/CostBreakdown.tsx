@@ -31,6 +31,19 @@ interface CostBreakdownData {
     nb_tours_today: number
     share: number
   }
+  /* Terme km et terme remorque (#59) : facturés par l'extraction, ils
+     n'apparaissaient nulle part dans le coût de la tournée. */
+  km_term?: {
+    total_km: number
+    cost_per_km: number
+    cost: number
+  }
+  trailer_term?: {
+    daily_cost: number
+    nb_tours_today: number
+    own_trailer: boolean
+    cost: number
+  }
   vacation_cost?: {
     daily_cost: number
     nb_tours_today: number
@@ -157,6 +170,12 @@ export function CostBreakdown({ tourId, onClose }: CostBreakdownProps) {
                     était donc gonflé de moitié. */}
                 <div className="mt-1 font-bold" style={{ color: 'var(--text-primary)' }}>
                   ({data.vacation_cost?.daily_cost ?? 0} / {data.vacation_cost?.nb_tours_today ?? 1})
+                  {(data.km_term?.cost_per_km ?? 0) > 0 && (
+                    <>{' + '}({data.total_km} x {data.km_term?.cost_per_km})</>
+                  )}
+                  {(data.trailer_term?.cost ?? 0) > 0 && (
+                    <>{' + '}({data.trailer_term?.daily_cost} / {data.trailer_term?.nb_tours_today})</>
+                  )}
                   {' + '}({data.total_km} x {data.fuel_cost?.fuel_price_per_liter ?? 0} x {data.fuel_cost?.consumption_coefficient ?? 0})
                   {' + '}{t('costBreakdown.kmTaxSum')}
                 </div>
@@ -176,6 +195,36 @@ export function CostBreakdown({ tourId, onClose }: CostBreakdownProps) {
                     value={`${data.vacation_cost?.daily_cost ?? 0} / ${data.vacation_cost?.nb_tours_today ?? 1} = ${data.vacation_cost?.share ?? 0} €`}
                     bold
                   />
+                </Section>
+              )}
+
+              {/* 1b. Terme km (#59) */}
+              {(data.km_term?.cost_per_km ?? 0) > 0 && (
+                <Section title="1b. Terme km" amount={data.km_term?.cost ?? 0}>
+                  <Row label="Kilomètres" value={String(data.km_term?.total_km ?? 0)} />
+                  <Row label="Tarif au km" value={`${data.km_term?.cost_per_km ?? 0} €`} />
+                  <Row
+                    label={t('costBreakdown.share')}
+                    value={`${data.km_term?.total_km ?? 0} x ${data.km_term?.cost_per_km ?? 0} = ${data.km_term?.cost ?? 0} €`}
+                    bold
+                  />
+                </Section>
+              )}
+
+              {/* 1c. Terme remorque (#59) — non dû en mode mixte (#41) */}
+              {(data.trailer_term?.daily_cost ?? 0) > 0 && (
+                <Section title="1c. Terme remorque" amount={data.trailer_term?.cost ?? 0}>
+                  <Row label="Montant journalier" value={`${data.trailer_term?.daily_cost ?? 0} €`} />
+                  <Row label={t('costBreakdown.nbToursToday')} value={String(data.trailer_term?.nb_tours_today ?? 1)} />
+                  {data.trailer_term?.own_trailer ? (
+                    <Row label="Remorque" value="CMRO (mixte) — terme non dû" bold />
+                  ) : (
+                    <Row
+                      label={t('costBreakdown.share')}
+                      value={`${data.trailer_term?.daily_cost ?? 0} / ${data.trailer_term?.nb_tours_today ?? 1} = ${data.trailer_term?.cost ?? 0} €`}
+                      bold
+                    />
+                  )}
                 </Section>
               )}
 

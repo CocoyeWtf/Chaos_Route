@@ -238,10 +238,20 @@ async def _calculate_cost(
     tour_date: str,
     tour_base_id: int,
     stops: list[dict],
+    own_trailer: bool = False,
 ) -> tuple[float, list[str]]:
     """Calculer le coût du tour / Calculate tour cost.
-    Formule : (vacation / nb_tours_jour) + (km * fuel_price * consumption_coeff) + sum(km_tax par segment)
-    Retourne (cost, warnings) / Returns (cost, warnings)
+
+    Formule : (vacation / nb_tours_jour) + terme km + terme remorque
+              + (km * prix carburant * coeff consommation) + somme(taxe km par segment)
+
+    `own_trailer` : la tournée roule avec une remorque CMRO (mode mixte). Le terme
+    remorque n'est alors pas dû — même règle que la pré-facturation (#41).
+
+    Le terme km et le terme remorque étaient absents de ce calcul alors que la
+    pré-facturation les compte (#59) : le coût affiché sur une tournée était donc
+    plus bas que ce qui sera facturé. / Km and trailer terms were missing here
+    while the billing extraction charges them.
     """
     cost = 0.0
     warnings: list[str] = []
@@ -259,6 +269,12 @@ async def _calculate_cost(
     # qui portent la même valeur dans tous les contrats — le terme était donc
     # compté deux fois. / One single fixed term: both columns were added.
     cost += round(effective_vacation(contract) / nb_tours, 2)
+
+    # 1b. Terme km et terme remorque (#59) — mêmes règles que la pré-facturation.
+    # / Km and trailer terms, same rules as the billing extraction.
+    cost += round(total_km * float(contract.cost_per_km or 0), 2)
+    if not own_trailer:
+        cost += round(float(getattr(contract, "trailer_cost", 0) or 0) / nb_tours, 2)
 
     # 2. km * prix carburant (selon type du contrat) * coefficient consommation
     fuel_prices = await load_fuel_unit_prices(db, tour_date)
@@ -318,6 +334,7 @@ async def _recalculate_sibling_tours(
         ]
         new_cost, _ = await _calculate_cost(
             db, float(tour.total_km or 0), contract, tour.date, tour.base_id, stops_data,
+            own_trailer=bool(getattr(tour, "vehicle_id", None)),
         )
         if tour.total_cost != new_cost:
             tour.total_cost = new_cost
@@ -1885,6 +1902,7 @@ async def create_tour(
     if contract and data.departure_time:
         tour.total_cost, _ = await _calculate_cost(
             db, total_km, contract, data.date, data.base_id, stops_input,
+            own_trailer=bool(getattr(data, "vehicle_id", None)),
         )
 
     pdv_ids = []
@@ -2246,7 +2264,10 @@ async def schedule_tour(
     # Flush d'abord pour que nb_tours soit correct / Flush first so nb_tours count is correct
     await db.flush()
     if contract:
-        total_cost, _ = await _calculate_cost(db, total_km, contract, tour.date, tour.base_id, stops_data)
+        total_cost, _ = await _calculate_cost(
+            db, total_km, contract, tour.date, tour.base_id, stops_data,
+            own_trailer=bool(getattr(tour, "vehicle_id", None)),
+        )
         tour.total_cost = total_cost
     else:
         tour.total_cost = None  # Parc propre : coût géré par VehicleCostEntry / Own fleet: cost via VehicleCostEntry
@@ -2346,6 +2367,7 @@ async def reorder_tour_stops(
             if contract:
                 tour.total_cost, _ = await _calculate_cost(
                     db, tour.total_km, contract, tour.date, tour.base_id, stops_data,
+                    own_trailer=bool(getattr(tour, "vehicle_id", None)),
                 )
 
     await _log_audit(db, "tour", tour.id, "REORDER_STOPS", user, {"stop_order": data.stop_order})
@@ -2894,8 +2916,18 @@ async def get_tour_cost_breakdown(
             "segment_tax": seg_tax,
         })
 
+    # 4. Terme km et terme remorque (#59) : ils étaient facturés par l'extraction
+    # CMRO sans jamais apparaître dans le coût de la tournée ni dans ce détail.
+    # Le terme remorque n'est pas dû quand la tournée roule avec une remorque
+    # CMRO (mode mixte, #41). / Km and trailer terms, billed but never shown.
+    km_term = round(total_km * float(contract.cost_per_km or 0), 2)
+    own_trailer = bool(getattr(tour, "vehicle_id", None))
+    trailer_daily = float(getattr(contract, "trailer_cost", 0) or 0)
+    trailer_term = 0.0 if own_trailer else round(trailer_daily / nb_tours, 2)
+
     km_tax_total = round(km_tax_total, 2)
-    total_calculated = round(fixed_share + vacation_share + fuel_cost + km_tax_total, 2)
+    total_calculated = round(
+        fixed_share + vacation_share + km_term + trailer_term + fuel_cost + km_tax_total, 2)
 
     return {
         "tour_id": tour.id,
@@ -2927,6 +2959,17 @@ async def get_tour_cost_breakdown(
             "fuel_price_per_liter": fuel_price,
             "consumption_coefficient": consumption,
             "cost": fuel_cost,
+        },
+        "km_term": {
+            "total_km": total_km,
+            "cost_per_km": float(contract.cost_per_km or 0),
+            "cost": km_term,
+        },
+        "trailer_term": {
+            "daily_cost": trailer_daily,
+            "nb_tours_today": nb_tours,
+            "own_trailer": own_trailer,
+            "cost": trailer_term,
         },
         "km_tax": {
             "total": km_tax_total,
@@ -2981,6 +3024,7 @@ async def recalculate_tour_costs(
         old_cost = float(tour.total_cost) if tour.total_cost else 0
         new_cost, _ = await _calculate_cost(
             db, float(tour.total_km or 0), contract, tour.date, tour.base_id, stops_data,
+            own_trailer=bool(getattr(tour, "vehicle_id", None)),
         )
         if old_cost != new_cost:
             tour.total_cost = new_cost
@@ -3107,6 +3151,7 @@ async def _recalc_tour_after_stop_change(db: AsyncSession, tour: Tour) -> dict:
         if contract:
             cost, cost_warnings = await _calculate_cost(
                 db, tour.total_km, contract, tour.date, tour.base_id, stops_data,
+                own_trailer=bool(getattr(tour, "vehicle_id", None)),
             )
             tour.total_cost = round(cost, 2)
             warnings.extend(cost_warnings)

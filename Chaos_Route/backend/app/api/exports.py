@@ -5,7 +5,7 @@ from datetime import date as date_type, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -465,7 +465,14 @@ async def export_postier_planning(
         ws.cell(r, 8, semi)
         ws.cell(r, 9, gel)
         # 10 = TKT — laissé vide
-        ws.cell(r, 11, tour.remarks or tour.destination or "")
+        # Remarque : fond jaune et texte rouge quand elle est renseignée (#48).
+        # Le postier doit la repérer d'un coup d'œil sur une feuille dense. /
+        # Remarks stand out: yellow fill, red text, only when filled in.
+        remarque = tour.remarks or tour.destination or ""
+        cellule_remarque = ws.cell(r, 11, remarque)
+        if remarque:
+            cellule_remarque.fill = PatternFill("solid", fgColor="FFFF00")
+            cellule_remarque.font = Font(color="FF0000", bold=True)
         ws.cell(r, 12, base_disp)
         ws.cell(r, 13, base_disp)
         # PDV 1..16 + EQC (colonnes N..AS)

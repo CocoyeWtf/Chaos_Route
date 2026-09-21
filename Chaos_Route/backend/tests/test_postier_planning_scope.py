@@ -207,3 +207,40 @@ async def test_postier_still_excludes_unscheduled(client, db_session, test_regio
     codes = _codes(resp.content)
     assert avec_heure.code in codes
     assert sans_heure.code not in codes
+
+
+@pytest.mark.asyncio
+async def test_remarque_mise_en_evidence(client, db_session, test_region):
+    """Ticket #48 : une remarque renseignée ressort en jaune, texte rouge.
+
+    Sur une feuille dense, le postier doit la repérer sans la chercher. Une
+    tournée sans remarque garde une cellule neutre — sinon le repère ne servirait
+    plus à rien.
+    """
+    base = await _make_base(db_session, test_region)
+    avec = await _make_tour(db_session, base, date=PLANIF, delivery_date=LIVRAISON,
+                            status="DRAFT", departure="06:00")
+    sans = await _make_tour(db_session, base, date=PLANIF, delivery_date=LIVRAISON,
+                            status="DRAFT", departure="07:00")
+    avec.remarks = "Attention hayon HS"
+    await db_session.commit()
+
+    resp = await client.get("/api/exports/postier-planning", params={
+        "date": PLANIF, "base_id": base.id, "source": "ordonnancement"})
+    assert resp.status_code == 200, resp.text
+    ws = load_workbook(io.BytesIO(resp.content))["Tours"]
+
+    cellules = {}
+    for row in range(7, ws.max_row + 1):
+        code = ws.cell(row, 2).value
+        if code:
+            cellules[str(code)] = ws.cell(row, 11)
+
+    marquee = cellules[avec.code]
+    assert marquee.value == "Attention hayon HS"
+    assert marquee.fill.fgColor.rgb.endswith("FFFF00"), marquee.fill.fgColor.rgb
+    assert marquee.font.color.rgb.endswith("FF0000"), marquee.font.color.rgb
+
+    neutre = cellules[sans.code]
+    assert not neutre.value
+    assert neutre.fill.fgColor.rgb in (None, "00000000"), neutre.fill.fgColor.rgb

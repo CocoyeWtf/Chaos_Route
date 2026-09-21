@@ -1,6 +1,6 @@
 """Routes Export CSV/Excel / Export API routes."""
 
-from datetime import datetime
+from datetime import date as date_type, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -140,10 +140,15 @@ async def export_wms_infolog(
         base_index = global_index
         global_index += n
 
+        # Colonne E : une DATE, pas un horodatage (#34). On écrivait un datetime,
+        # qu'Excel affichait « 2026-08-13 0:00:00 » — la macro d'encodage attend
+        # une date nue au format JJ-MM-AA. Le format est posé sur la cellule
+        # plus bas, une fois la ligne ajoutée. /
+        # Column E must be a plain date, not a timestamp.
         delivery_date_str = tour.delivery_date or tour.date
         try:
             y, mo, d = (int(x) for x in delivery_date_str.split("-"))
-            delivery_date_val: object = datetime(y, mo, d)
+            delivery_date_val: object = date_type(y, mo, d)
         except (ValueError, AttributeError):
             delivery_date_val = delivery_date_str
 
@@ -157,7 +162,9 @@ async def export_wms_infolog(
             idx = base_index + delivery_rank
             pdv_code = stop.pdv.code if stop.pdv else ""
             ws.append([
-                ordre,                              # A
+                # float() : la priorité est décimale depuis le #29, et openpyxl
+                # n'écrit pas un Decimal comme un nombre.
+                float(ordre) if ordre is not None else None,  # A
                 pdv_code,                           # B
                 tour.driver_code_infolog or "",     # C
                 carrier_code,                       # D
@@ -166,6 +173,9 @@ async def export_wms_infolog(
                 idx,                                # G
                 dep_text,                           # H
             ])
+            # Format JJ-MM-AA sur la date de livraison (#34) / DD-MM-YY on the date
+            if isinstance(delivery_date_val, date_type):
+                ws.cell(ws.max_row, 5).number_format = "DD-MM-YY"
 
     content = io.BytesIO()
     wb.save(content)

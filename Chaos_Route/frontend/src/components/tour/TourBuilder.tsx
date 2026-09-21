@@ -227,8 +227,17 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
     return ids
   }, [assignedPdvIds, consumedVolumeIds, volumes])
 
-  /* Pas de filtrage par base — tous les volumes du jour / No base filtering — all volumes for the day */
-  const filteredVolumes = volumes
+  /* Volumes proposés au clic sur la carte. Ils doivent suivre le filtre de base
+     d'origine du panneau (#20), sinon cliquer un point de vente servi depuis
+     DEUX bases lui attribuait ses deux volumes secs — celui de Trazegnies ET
+     celui de Gosselies — quel que soit le filtre affiché (#23). Le panneau
+     latéral, lui, filtrait correctement : les deux vues se contredisaient. /
+     Map-click volumes must honour the panel's origin-base filter: a PDV served
+     from two bases had both of its volumes attached whatever the filter said. */
+  const filteredVolumes = useMemo(
+    () => (baseFilters.size > 0 ? volumes.filter((v) => baseFilters.has(v.base_origin_id)) : volumes),
+    [volumes, baseFilters],
+  )
 
   /* Tous les volumes du jour (avec et sans tour_id) / All day's volumes (assigned+unassigned) */
   const allDayVolumes = useMemo(() => {

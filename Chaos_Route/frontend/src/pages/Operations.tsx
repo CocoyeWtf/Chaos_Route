@@ -1225,6 +1225,10 @@ function TourRow({
                         stop.pickup_returns && 'R',
                       ].filter(Boolean).join(' ')
                       const stopDispatch = volumes.find((v) => v.tour_id === tour.id && v.pdv_id === stop.pdv_id && v.dispatch_date)
+                      /* Un volume scindé porte un groupe de découpage : l'arrêt ne
+                         transporte qu'une part de la commande d'origine (#49). */
+                      const stopIsSplit = volumes.some((v) => v.tour_id === tour.id
+                        && v.pdv_id === stop.pdv_id && v.split_group_id != null)
                       /* Temperatures distinctes des volumes de ce stop, fallback sur le stop lui-meme /
                          Distinct temperatures from this stop's volumes, fallback on the stop field */
                       const stopTemps: TemperatureClass[] = (() => {
@@ -1254,6 +1258,18 @@ function TourRow({
                                 {tc}
                               </span>
                             ))}
+                            {/* Volume scindé (#49) : cet arrêt ne porte qu'une PARTIE
+                                du volume d'origine, l'autre est ailleurs. Rien ne le
+                                signalait, alors que cela change la lecture des EQC. */}
+                            {stopIsSplit && (
+                              <span
+                                className="mr-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-bold align-middle"
+                                style={{ backgroundColor: 'rgba(99,102,241,0.18)', color: '#6366f1' }}
+                                title="Volume scindé : cet arrêt ne porte qu'une partie du volume d'origine"
+                              >
+                                SCINDÉ
+                              </span>
+                            )}
                             <span className="font-semibold">{pdv?.code ?? ''}</span>
                             <span className="ml-1">{pdv?.name ?? `#${stop.pdv_id}`}</span>
                             {pdv?.city && <span className="ml-1" style={{ color: 'var(--text-muted)' }}>({pdv.city})</span>}

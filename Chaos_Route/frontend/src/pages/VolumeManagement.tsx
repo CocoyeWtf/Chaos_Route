@@ -24,9 +24,23 @@ export default function VolumeManagement() {
   const columns: Column<Volume>[] = [
     { key: 'date', label: t('common.date'), width: '110px', filterable: true, render: (row) => formatDate(row.date), filterValue: (row) => formatDate(row.date) },
     {
+      /* Numéro ET nom (#39) : la colonne n'affichait que le nom et ne filtrait
+         que dessus, alors que l'exploitation désigne les points de vente par leur
+         numéro. On s'appuie d'abord sur le code résolu par le serveur, pour que
+         la recherche fonctionne même si la liste des PDV n'est pas encore
+         chargée. / Show and filter on the PDV number as well as its name. */
       key: 'pdv_id', label: t('volumes.pdv'), filterable: true,
-      render: (row) => pdvs.find((p) => p.id === row.pdv_id)?.name || String(row.pdv_id),
-      filterValue: (row) => pdvs.find((p) => p.id === row.pdv_id)?.name || '',
+      render: (row) => {
+        const pdv = pdvs.find((p) => p.id === row.pdv_id)
+        const code = row.pdv_code || pdv?.code
+        const nom = row.pdv_name || pdv?.name
+        if (code && nom) return `${code} — ${nom}`
+        return code || nom || String(row.pdv_id)
+      },
+      filterValue: (row) => {
+        const pdv = pdvs.find((p) => p.id === row.pdv_id)
+        return `${row.pdv_code || pdv?.code || ''} ${row.pdv_name || pdv?.name || ''}`.trim()
+      },
     },
     {
       key: 'eqp_count', label: t('volumes.eqpCount'), width: '90px',

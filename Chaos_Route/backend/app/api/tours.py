@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.audit import AuditLog
-from app.models.contract import Contract
+from app.models.contract import Contract, effective_vacation
 from app.models.distance_matrix import DistanceMatrix
 from app.models.km_tax import KmTax
 from app.models.parameter import Parameter
@@ -240,7 +240,7 @@ async def _calculate_cost(
     stops: list[dict],
 ) -> tuple[float, list[str]]:
     """Calculer le coût du tour / Calculate tour cost.
-    Formule : (fixed_daily_cost / nb_tours_jour) + (vacation / nb_tours_jour) + (km * fuel_price * consumption_coeff) + sum(km_tax par segment)
+    Formule : (vacation / nb_tours_jour) + (km * fuel_price * consumption_coeff) + sum(km_tax par segment)
     Retourne (cost, warnings) / Returns (cost, warnings)
     """
     cost = 0.0
@@ -255,8 +255,10 @@ async def _calculate_cost(
             Tour.date == tour_date,
         )
     ) or 1
-    cost += round(float(contract.fixed_daily_cost or 0) / nb_tours, 2)
-    cost += round(float(contract.vacation or 0) / nb_tours, 2)
+    # UNE seule vacation (#58) : on additionnait « terme fixe » ET « vacation »,
+    # qui portent la même valeur dans tous les contrats — le terme était donc
+    # compté deux fois. / One single fixed term: both columns were added.
+    cost += round(effective_vacation(contract) / nb_tours, 2)
 
     # 2. km * prix carburant (selon type du contrat) * coefficient consommation
     fuel_prices = await load_fuel_unit_prices(db, tour_date)
@@ -1124,8 +1126,12 @@ async def transporter_summary(
         base = bases_map.get(tour.base_id)
         total_km = float(tour.total_km or 0)
         nb_tours = nb_tours_map.get((contract.id, tour.date), 1)
-        fixed_share = round(float(contract.fixed_daily_cost or 0) / nb_tours, 2)
-        vacation_share = round(float(contract.vacation or 0) / nb_tours, 2)
+        # Une seule vacation (#58) : « terme fixe » et « vacation » sont le même
+        # montant. `fixed_share` reste exposé à 0 pour ne pas casser les
+        # consommateurs existants du détail de coût. /
+        # Single fixed term; `fixed_share` kept at 0 for backward compatibility.
+        fixed_share = 0.0
+        vacation_share = round(effective_vacation(contract) / nb_tours, 2)
 
         fuel_price = price_for_contract(fuel_map.get(tour.date, {}), contract)
         consumption = float(contract.consumption_coefficient or 0)
@@ -2825,9 +2831,10 @@ async def get_tour_cost_breakdown(
             Tour.date == tour.date,
         )
     ) or 1
-    fixed_daily = float(contract.fixed_daily_cost or 0)
-    fixed_share = round(fixed_daily / nb_tours, 2)
-    vacation_daily = float(contract.vacation or 0)
+    # Une seule vacation (#58) — voir effective_vacation. / Single fixed term.
+    fixed_daily = 0.0
+    fixed_share = 0.0
+    vacation_daily = effective_vacation(contract)
     vacation_share = round(vacation_daily / nb_tours, 2)
 
     # 2. Coût carburant (selon type du contrat) / Fuel cost (by contract fuel type)

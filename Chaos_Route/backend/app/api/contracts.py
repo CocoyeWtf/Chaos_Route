@@ -115,6 +115,20 @@ def _sync_provides_trailer(contract) -> None:
     contract.provides_trailer = supply is not TrailerSupply.CMRO
 
 
+def _sync_vacation(contract) -> None:
+    """Tenir « terme fixe » et « vacation » égaux (ticket #58).
+
+    Les deux champs désignent la même chose pour l'exploitation. L'interface n'en
+    expose plus qu'un, nommé « vacation » ; on recopie donc la valeur dans les
+    deux colonnes pour que l'extraction de pré-facturation — qui lit
+    `fixed_daily_cost` — reste exacte, et pour qu'elles ne puissent pas diverger.
+    / Keep both columns equal: the UI exposes one, the extraction reads the other.
+    """
+    valeur = contract.vacation if contract.vacation is not None else contract.fixed_daily_cost
+    contract.fixed_daily_cost = valeur
+    contract.vacation = valeur
+
+
 @router.post("/", response_model=ContractRead, status_code=201)
 async def create_contract(
     data: ContractCreate,
@@ -125,6 +139,7 @@ async def create_contract(
     contract_data = data.model_dump(exclude={"schedules"})
     contract = Contract(**contract_data)
     _sync_provides_trailer(contract)
+    _sync_vacation(contract)
     db.add(contract)
     await db.flush()
 
@@ -155,6 +170,7 @@ async def update_contract(
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(contract, key, value)
     _sync_provides_trailer(contract)
+    _sync_vacation(contract)
     await db.flush()
     result = await db.execute(
         select(Contract).where(Contract.id == contract.id).options(selectinload(Contract.schedules), selectinload(Contract.carrier))

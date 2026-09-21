@@ -71,6 +71,12 @@ class Contract(Base, TenantMixin):
     # Contrat / Contract
     transporter_name: Mapped[str] = mapped_column(String(150), nullable=False)
     code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    # « Terme fixe » et « vacation » désignent la MÊME chose dans le métier
+    # (ticket #58) : les 74 contrats renseignés portaient d'ailleurs la même
+    # valeur dans les deux champs. Les deux colonnes subsistent — l'extraction
+    # de pré-facturation lit `fixed_daily_cost` — mais elles sont tenues
+    # synchronisées à l'écriture et ne comptent QU'UNE FOIS dans le coût.
+    # / Same business notion; kept in sync, counted once.
     fixed_daily_cost: Mapped[float | None] = mapped_column(Numeric(10, 2))
     vacation: Mapped[float | None] = mapped_column(Numeric(10, 2))
     cost_per_km: Mapped[float | None] = mapped_column(Numeric(10, 4))
@@ -156,3 +162,19 @@ def effective_trailer_supply(contract) -> TrailerSupply | None:
     if provides is False:
         return TrailerSupply.CMRO
     return None
+
+
+def effective_vacation(contract) -> float:
+    """Montant de la vacation (ex-« terme fixe ») d'un contrat, compté UNE fois.
+
+    Le coût des tournées additionnait `fixed_daily_cost` ET `vacation`, alors que
+    les deux champs portent la même valeur : le terme fixe était donc compté deux
+    fois — 394 085 EUR sur 819 305 EUR pour le seul mois de septembre. La
+    pré-facturation CMRO, elle, n'en comptait déjà qu'un seul (ticket #58).
+    / Single fixed term: the tour cost used to add both columns.
+    """
+    for champ in ("fixed_daily_cost", "vacation"):
+        valeur = getattr(contract, champ, None)
+        if valeur:
+            return float(valeur)
+    return 0.0

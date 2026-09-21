@@ -76,13 +76,15 @@ export default function ContractManagement() {
     },
     { key: 'capacity_eqp' as keyof Contract, label: t('contracts.capacity'), width: '80px' },
     {
-      key: 'fixed_daily_cost', label: t('contracts.fixedDailyCost'), width: '100px',
-      render: (row) => row.fixed_daily_cost != null ? `${row.fixed_daily_cost} €` : '—',
-    },
-    {
-      key: 'vacation' as keyof Contract, label: t('contracts.vacation'), width: '100px', defaultHidden: true,
+      /* Un seul montant (#58) : « terme fixe » et « vacation » désignaient la
+         même chose et portaient la même valeur dans tous les contrats. On garde
+         le vocabulaire de l'exploitation — vacation — et le serveur tient les
+         deux colonnes égales pour l'extraction de pré-facturation. /
+         One amount: "fixed term" and "vacation" were the same thing. */
+      key: 'vacation' as keyof Contract, label: 'Vacation', width: '100px',
       render: (row) => row.vacation != null ? `${row.vacation} €` : '—',
     },
+
     {
       key: 'cost_per_km', label: t('contracts.costPerKm'), width: '80px',
       render: (row) => row.cost_per_km != null ? `${row.cost_per_km} €` : '—',
@@ -140,8 +142,9 @@ export default function ContractManagement() {
       helperText: 'Detemine le prix carburant applique (gasoil €/L ou gaz €/kg).',
     },
     // Couts
-    { key: 'fixed_daily_cost', label: t('contracts.fixedDailyCost'), type: 'number', step: 0.01 },
-    { key: 'vacation', label: t('contracts.vacation'), type: 'number', step: 0.01 },
+    /* Un seul champ de saisie (#58). Le serveur recopie la valeur dans l'ancien
+       champ « terme fixe », que lit l'extraction de pré-facturation. */
+    { key: 'vacation', label: 'Vacation (terme fixe)', type: 'number', step: 0.01 },
     { key: 'cost_per_km', label: t('contracts.costPerKm'), type: 'number', step: 0.0001 },
     { key: 'cost_per_hour', label: t('contracts.costPerHour'), type: 'number', step: 0.01 },
     // Barème pré-facturation CMRO

@@ -152,34 +152,21 @@ export function CostBreakdown({ tourId, onClose }: CostBreakdownProps) {
                 style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}
               >
                 {t('costBreakdown.formula')}:
+                {/* Une seule vacation (#58) : la formule additionnait le terme fixe
+                    ET la vacation, deux noms du même montant — le coût affiché
+                    était donc gonflé de moitié. */}
                 <div className="mt-1 font-bold" style={{ color: 'var(--text-primary)' }}>
-                  ({data.fixed_cost?.daily_cost ?? 0} / {data.fixed_cost?.nb_tours_today ?? 1})
-                  {(data.vacation_cost?.daily_cost ?? 0) > 0 && (
-                    <>{' + '}({data.vacation_cost?.daily_cost ?? 0} / {data.vacation_cost?.nb_tours_today ?? 1})</>
-                  )}
+                  ({data.vacation_cost?.daily_cost ?? 0} / {data.vacation_cost?.nb_tours_today ?? 1})
                   {' + '}({data.total_km} x {data.fuel_cost?.fuel_price_per_liter ?? 0} x {data.fuel_cost?.consumption_coefficient ?? 0})
                   {' + '}{t('costBreakdown.kmTaxSum')}
                 </div>
               </div>
 
-              {/* 1. Fixed cost */}
-              <Section
-                title={`1. ${t('costBreakdown.fixedCost')}`}
-                amount={data.fixed_cost?.share ?? 0}
-              >
-                <Row label={t('costBreakdown.dailyCost')} value={`${data.fixed_cost?.daily_cost ?? 0} €`} />
-                <Row label={t('costBreakdown.nbToursToday')} value={String(data.fixed_cost?.nb_tours_today ?? 1)} />
-                <Row
-                  label={t('costBreakdown.share')}
-                  value={`${data.fixed_cost?.daily_cost ?? 0} / ${data.fixed_cost?.nb_tours_today ?? 1} = ${data.fixed_cost?.share ?? 0} €`}
-                  bold
-                />
-              </Section>
-
-              {/* 1b. Vacation cost */}
+              {/* 1. Vacation — anciennement scindée en « terme fixe » + « vacation »,
+                     additionnés alors qu'il s'agit du même montant (#58). */}
               {(data.vacation_cost?.daily_cost ?? 0) > 0 && (
                 <Section
-                  title={`1b. ${t('costBreakdown.vacationCost')}`}
+                  title={`1. Vacation`}
                   amount={data.vacation_cost?.share ?? 0}
                 >
                   <Row label={t('costBreakdown.vacationDaily')} value={`${data.vacation_cost?.daily_cost ?? 0} €`} />

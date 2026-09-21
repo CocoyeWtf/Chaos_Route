@@ -177,6 +177,7 @@ export function PermissionMatrix({ value, onChange }: PermissionMatrixProps) {
 
   const toggleGroup = (group: ResourceGroup) => {
     const groupResources = group.resources.map((r) => r.resource)
+    if (groupResources.length === 0) return
     const allChecked = groupResources.every((r) => ACTIONS.every((a) => has(r, a)))
     if (allChecked) {
       onChange(value.filter((p) => !groupResources.includes(p.resource)))
@@ -190,6 +191,7 @@ export function PermissionMatrix({ value, onChange }: PermissionMatrixProps) {
 
   const toggleGroupCol = (group: ResourceGroup, action: string) => {
     const resources = group.resources.map((r) => r.resource)
+    if (resources.length === 0) return
     const colChecked = resources.every((r) => has(r, action))
     if (colChecked) {
       onChange(value.filter((p) => !(resources.includes(p.resource) && p.action === action)))
@@ -200,25 +202,37 @@ export function PermissionMatrix({ value, onChange }: PermissionMatrixProps) {
     }
   }
 
+  /* Les cases « tout » ne doivent agir QUE sur ce qui est affiché. Certaines
+     ressources existent au catalogue sans figurer dans la matrice — celles du
+     module contenants, encore commentées — et trois rôles en détiennent déjà
+     (PDV, Responsable Contenants, Bêta Testeur ont des droits « pdv-stock »).
+     Elles étaient effacées en silence au premier clic sur une case « tout »,
+     puisque la liste était reconstruite à partir des seules ressources visibles.
+     On les préserve donc explicitement. (#21) /
+     Bulk toggles must only affect displayed resources: permissions on resources
+     absent from the matrix were silently wiped. */
+  const isVisible = (resource: string) => ALL_RESOURCES.includes(resource)
+
   const toggleCol = (action: string) => {
     const allChecked = ALL_RESOURCES.every((r) => has(r, action))
+    const without = value.filter((p) => !(p.action === action && isVisible(p.resource)))
     if (allChecked) {
-      onChange(value.filter((p) => p.action !== action))
+      onChange(without)
     } else {
-      const without = value.filter((p) => p.action !== action)
-      const added = ALL_RESOURCES.map((r) => ({ resource: r, action }))
-      onChange([...without, ...added])
+      onChange([...without, ...ALL_RESOURCES.map((r) => ({ resource: r, action }))])
     }
   }
 
   const toggleAll = () => {
     const total = ALL_RESOURCES.length * ACTIONS.length
-    if (value.length >= total) {
-      onChange([])
+    const visibleCount = value.filter((p) => isVisible(p.resource)).length
+    const hidden = value.filter((p) => !isVisible(p.resource))
+    if (visibleCount >= total) {
+      onChange(hidden)
     } else {
       const all: PermissionEntry[] = []
       ALL_RESOURCES.forEach((r) => ACTIONS.forEach((a) => all.push({ resource: r, action: a })))
-      onChange(all)
+      onChange([...hidden, ...all])
     }
   }
 
@@ -275,9 +289,18 @@ export function PermissionMatrix({ value, onChange }: PermissionMatrixProps) {
 
       {/* Groupes / Groups */}
       {RESOURCE_GROUPS.map((group) => {
+        /* Ticket #21 : un groupe sans ressource ne doit PAS s'afficher. Le groupe
+           « PDV » est un emplacement réservé au module contenants, dont les
+           ressources sont encore commentées : il s'affichait donc vide, avec le
+           compteur 0/0 — et ses quatre cases apparaissaient COCHÉES, parce que
+           `[].every(...)` vaut `true` en JavaScript. Le clic recalculait la même
+           chose, d'où « coché d'office et impossible à décocher ». /
+           An empty group must not render: `[].every(...)` is true, so its column
+           checkboxes looked permanently checked and could not be unchecked. */
+        if (group.resources.length === 0) return null
         const isCollapsed = collapsed.has(group.key)
         const { active, total } = groupCount(group)
-        const allGroupChecked = active === total
+        const allGroupChecked = total > 0 && active === total
 
         return (
           <div key={group.key} className="mb-0.5">
@@ -316,7 +339,8 @@ export function PermissionMatrix({ value, onChange }: PermissionMatrixProps) {
                 </span>
               </div>
               {ACTIONS.map((action) => {
-                const colChecked = group.resources.every((r) => has(r.resource, action))
+                const colChecked = group.resources.length > 0
+                  && group.resources.every((r) => has(r.resource, action))
                 return (
                   <div key={action} className="text-center">
                     <Check checked={colChecked} onChange={() => toggleGroupCol(group, action)} size={22} />

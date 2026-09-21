@@ -64,7 +64,10 @@ export default function ContractManagement() {
         </button>
       ),
     },
-    { key: 'vehicle_code' as keyof Contract, label: t('contracts.vehicleCode'), width: '100px', filterable: true },
+    /* Le champ porte le code Infolog du véhicule : c'est ainsi que
+       l'exploitation le nomme, et c'est sous ce nom qu'il sert à rapprocher les
+       tournées de l'encodage Infolog (#61). / Renamed to its operational name. */
+    { key: 'vehicle_code' as keyof Contract, label: 'Code Infolog', width: '110px', filterable: true },
     { key: 'vehicle_name' as keyof Contract, label: t('contracts.vehicleName'), width: '130px', filterable: true },
     {
       key: 'temperature_type' as keyof Contract, label: t('vehicles.temperatureType'), width: '90px', filterable: true,
@@ -111,7 +114,7 @@ export default function ContractManagement() {
       helperText: 'Si le transporteur ne figure pas dans la liste, ajoutez-le d\'abord dans Referentiel > Transporteurs.',
     },
     // Véhicule
-    { key: 'vehicle_code', label: t('contracts.vehicleCode'), type: 'text' },
+    { key: 'vehicle_code', label: 'Code Infolog', type: 'text' },
     { key: 'vehicle_name', label: t('contracts.vehicleName'), type: 'text' },
     { key: 'temperature_type', label: t('vehicles.temperatureType'), type: 'select', options: tempOptions },
     { key: 'vehicle_type', label: t('vehicles.vehicleType'), type: 'select', options: vehicleTypeOptions },

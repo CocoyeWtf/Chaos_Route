@@ -10,7 +10,7 @@ import { useApi } from '../hooks/useApi'
 import { PdvBarcodePrint } from '../components/pdv/PdvBarcodePrint'
 import api from '../services/api'
 import type { PDV, Region, VehicleType } from '../types'
-import { VEHICLE_TYPE_DEFAULTS } from '../types'
+import { VEHICLE_TYPE_DEFAULTS, SELECTABLE_VEHICLE_TYPES } from '../types'
 
 export default function PdvManagement() {
   const { t } = useTranslation()
@@ -19,7 +19,9 @@ export default function PdvManagement() {
   const [barcodePdv, setBarcodePdv] = useState<PDV | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
 
-  const vehicleTypeOptions = (Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]).map((vt) => ({
+  /* Gabarits proposés à la saisie (#65) : CITY n'est plus un de leurs
+     transporteurs, il disparaît des cases à cocher. */
+  const vehicleTypeOptions = SELECTABLE_VEHICLE_TYPES.map((vt) => ({
     value: vt,
     label: VEHICLE_TYPE_DEFAULTS[vt].label,
   }))

@@ -151,3 +151,49 @@ async def test_cout_enregistre_inclut_le_terme_remorque(client, db_session, test
     tour = (await db_session.execute(select(Tour).where(Tour.id == tour_id))).scalar_one()
     # Le distancier est vide en test : 0 km, donc pas de terme km ni de carburant.
     assert float(tour.total_cost) == 380.0, "vacation 300 + terme remorque 80"
+
+
+@pytest.mark.asyncio
+async def test_contrat_au_forfait_journalier(client, db_session, test_region):
+    """Ticket #60 : un contrat occasionnel ou journalier, c'est un forfait divisé
+    par le nombre de tournées du jour — sans terme km, ni carburant, ni taxe.
+
+    Le coût affiché appliquait le barème complet quel que soit le type de
+    facturation, alors que la pré-facturation respectait déjà la règle.
+    """
+    from app.models.tour import Tour
+
+    contrat = await _contract(client, test_region.id, billing_type=3, daily_cost=900,
+                              cost_per_km=1.20, vacation=300)
+    base_id, pdv_id = await _base_pdv(db_session, test_region.id)
+    tour_id = await _tour(db_session, base_id, pdv_id, contrat["id"], 100)
+
+    resp = await client.get(f"/api/tours/{tour_id}/cost-breakdown")
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert d["daily_flat"]["daily_cost"] == 900.0
+    assert d["total_cost_calculated"] == 900.0, "une seule tournée ce jour-là"
+    assert "km_term" not in d, "pas de terme km sur un forfait journalier"
+
+    # Une seconde tournée le même jour partage le forfait
+    tour2 = await _tour(db_session, base_id, pdv_id, contrat["id"], 50)
+    resp = await client.get(f"/api/tours/{tour2}/cost-breakdown")
+    assert resp.json()["total_cost_calculated"] == 450.0
+
+    assert isinstance((await db_session.execute(
+        select(Tour).where(Tour.id == tour_id))).scalar_one().date, str)
+
+
+@pytest.mark.asyncio
+async def test_forfait_absent_est_signale(client, db_session, test_region):
+    """Un contrat au forfait sans montant renseigné doit alerter, pas coûter 0
+    en silence — le cas existe en production."""
+    contrat = await _contract(client, test_region.id, billing_type=3, vacation=580)
+    base_id, pdv_id = await _base_pdv(db_session, test_region.id)
+    tour_id = await _tour(db_session, base_id, pdv_id, contrat["id"], 100)
+
+    resp = await client.get(f"/api/tours/{tour_id}/cost-breakdown")
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert d["total_cost_calculated"] == 0.0
+    assert any("forfait journalier absent" in w for w in d["warnings"]), d["warnings"]

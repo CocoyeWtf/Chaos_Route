@@ -31,6 +31,15 @@ interface CostBreakdownData {
     nb_tours_today: number
     share: number
   }
+  /* Contrat au forfait journalier — types occasionnel, journalier, base et
+     intérim (#60). Le détail se résume alors au forfait divisé par le nombre de
+     tournées du jour : ni terme km, ni carburant, ni taxe. /
+     Daily flat-rate contract: the breakdown is just the flat rate. */
+  daily_flat?: {
+    daily_cost: number
+    nb_tours_today: number
+    share: number
+  }
   /* Terme km et terme remorque (#59) : facturés par l'extraction, ils
      n'apparaissaient nulle part dans le coût de la tournée. */
   km_term?: {
@@ -181,9 +190,22 @@ export function CostBreakdown({ tourId, onClose }: CostBreakdownProps) {
                 </div>
               </div>
 
+              {/* Forfait journalier (#60) : un seul poste, et on s'arrête là. */}
+              {data.daily_flat && (
+                <Section title="Forfait journalier" amount={data.daily_flat.share}>
+                  <Row label="Forfait du contrat" value={`${data.daily_flat.daily_cost} €`} />
+                  <Row label={t('costBreakdown.nbToursToday')} value={String(data.daily_flat.nb_tours_today)} />
+                  <Row
+                    label={t('costBreakdown.share')}
+                    value={`${data.daily_flat.daily_cost} / ${data.daily_flat.nb_tours_today} = ${data.daily_flat.share} €`}
+                    bold
+                  />
+                </Section>
+              )}
+
               {/* 1. Vacation — anciennement scindée en « terme fixe » + « vacation »,
                      additionnés alors qu'il s'agit du même montant (#58). */}
-              {(data.vacation_cost?.daily_cost ?? 0) > 0 && (
+              {!data.daily_flat && (data.vacation_cost?.daily_cost ?? 0) > 0 && (
                 <Section
                   title={`1. Vacation`}
                   amount={data.vacation_cost?.share ?? 0}
@@ -199,7 +221,7 @@ export function CostBreakdown({ tourId, onClose }: CostBreakdownProps) {
               )}
 
               {/* 1b. Terme km (#59) */}
-              {(data.km_term?.cost_per_km ?? 0) > 0 && (
+              {!data.daily_flat && (data.km_term?.cost_per_km ?? 0) > 0 && (
                 <Section title="1b. Terme km" amount={data.km_term?.cost ?? 0}>
                   <Row label="Kilomètres" value={String(data.km_term?.total_km ?? 0)} />
                   <Row label="Tarif au km" value={`${data.km_term?.cost_per_km ?? 0} €`} />
@@ -212,7 +234,7 @@ export function CostBreakdown({ tourId, onClose }: CostBreakdownProps) {
               )}
 
               {/* 1c. Terme remorque (#59) — non dû en mode mixte (#41) */}
-              {(data.trailer_term?.daily_cost ?? 0) > 0 && (
+              {!data.daily_flat && (data.trailer_term?.daily_cost ?? 0) > 0 && (
                 <Section title="1c. Terme remorque" amount={data.trailer_term?.cost ?? 0}>
                   <Row label="Montant journalier" value={`${data.trailer_term?.daily_cost ?? 0} €`} />
                   <Row label={t('costBreakdown.nbToursToday')} value={String(data.trailer_term?.nb_tours_today ?? 1)} />

@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.audit import AuditLog
 from app.models.contract import Contract, effective_vacation
+from app.services.cmro_extraction import billing_type_of
 from app.models.distance_matrix import DistanceMatrix
 from app.models.km_tax import KmTax
 from app.models.parameter import Parameter
@@ -265,6 +266,22 @@ async def _calculate_cost(
             Tour.date == tour_date,
         )
     ) or 1
+
+    # Contrats hors « tractionnaire » (types 1 base/intérim, 3 occasionnel,
+    # 4 journalier) : un forfait journalier divisé par le nombre de tournées du
+    # jour, et RIEN d'autre — ni terme km, ni carburant, ni taxe. Le coût affiché
+    # ignorait ce type de facturation et appliquait le barème complet, alors que
+    # la pré-facturation, elle, le respectait déjà (#60). /
+    # Non-haulier contracts: a daily flat rate split across the day's tours.
+    if billing_type_of(contract) != 2:
+        daily = float(getattr(contract, "daily_cost", 0) or 0)
+        if not daily:
+            warnings.append(
+                f"Contrat {contract.code} : forfait journalier absent alors que le "
+                f"type de facturation ({contract.billing_type}) l'exige."
+            )
+        return round(daily / nb_tours, 2), warnings
+
     # UNE seule vacation (#58) : on additionnait « terme fixe » ET « vacation »,
     # qui portent la même valeur dans tous les contrats — le terme était donc
     # compté deux fois. / One single fixed term: both columns were added.
@@ -2915,6 +2932,36 @@ async def get_tour_cost_breakdown(
             "distance_km": seg_km,
             "segment_tax": seg_tax,
         })
+
+    # Contrat au forfait journalier (#60) : le détail se résume au forfait.
+    if billing_type_of(contract) != 2:
+        daily = float(getattr(contract, "daily_cost", 0) or 0)
+        part = round(daily / nb_tours, 2)
+        if not daily:
+            breakdown_warnings.append(
+                f"Contrat {contract.code} : forfait journalier absent alors que le "
+                f"type de facturation ({contract.billing_type}) l'exige."
+            )
+        return {
+            "tour_id": tour.id,
+            "tour_code": tour.code,
+            "tour_date": tour.date,
+            "total_km": total_km,
+            "total_cost_stored": float(tour.total_cost) if tour.total_cost else 0,
+            "total_cost_calculated": part,
+            "warnings": breakdown_warnings,
+            "contract": {
+                "code": contract.code,
+                "transporter_name": contract.transporter_name,
+                "billing_type": contract.billing_type,
+                "daily_cost": daily,
+            },
+            "daily_flat": {
+                "daily_cost": daily,
+                "nb_tours_today": nb_tours,
+                "share": part,
+            },
+        }
 
     # 4. Terme km et terme remorque (#59) : ils étaient facturés par l'extraction
     # CMRO sans jamais apparaître dans le coût de la tournée ni dans ce détail.

@@ -84,7 +84,7 @@ export interface PDV {
 }
 
 export type TemperatureType = 'GEL' | 'FRAIS' | 'SEC' | 'BI_TEMP' | 'TRI_TEMP'
-export type VehicleType = 'SEMI' | 'PORTEUR' | 'PORTEUR_SURBAISSE' | 'PORTEUR_REMORQUE' | 'CITY' | 'VL'
+export type VehicleType = 'SEMI' | 'SEMI_COURTE' | 'PORTEUR' | 'PORTEUR_SURBAISSE' | 'PORTEUR_REMORQUE' | 'CITY' | 'VL'
 export type TailgateType = 'RETRACTABLE' | 'RABATTABLE'
 
 export interface Supplier {
@@ -427,12 +427,22 @@ export const TICKET_PRIORITY_LABELS: Record<TicketPriority, string> = {
 
 export const VEHICLE_TYPE_DEFAULTS: Record<VehicleType, { label: string; capacity_eqp: number }> = {
   SEMI: { label: 'Semi-remorque', capacity_eqp: 54 },
+  SEMI_COURTE: { label: 'Semi courte', capacity_eqp: 44 },
   PORTEUR: { label: 'Porteur', capacity_eqp: 33 },
   PORTEUR_SURBAISSE: { label: 'Porteur surbaissé', capacity_eqp: 33 },
   PORTEUR_REMORQUE: { label: 'Porteur + Remorque', capacity_eqp: 43 },
+  // CITY n'est plus proposé à la saisie (#65) — voir SELECTABLE_VEHICLE_TYPES —
+  // mais reste défini : des tournées et des points de vente y font référence.
   CITY: { label: 'City', capacity_eqp: 16 },
   VL: { label: 'VL', capacity_eqp: 8 },
 }
+
+/* Gabarits proposés à la SAISIE (#65). CITY est retiré des choix — ce n'est plus
+   un de leurs transporteurs — mais conservé dans VEHICLE_TYPE_DEFAULTS pour que
+   les tournées et points de vente qui le portent restent lisibles. /
+   Vehicle types offered for input: CITY is no longer proposed but stays defined. */
+export const SELECTABLE_VEHICLE_TYPES: VehicleType[] =
+  (Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]).filter((vt) => vt !== 'CITY')
 
 /* Couleurs température / Temperature colors */
 export const TEMPERATURE_COLORS: Record<TemperatureClass, string> = {

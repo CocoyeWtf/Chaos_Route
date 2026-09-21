@@ -1,7 +1,7 @@
 /* Sélecteur température + véhicule / Temperature + vehicle selector */
 
 import type { VehicleType, TemperatureType, TemperatureClass } from '../../types'
-import { VEHICLE_TYPE_DEFAULTS, TEMPERATURE_COLORS, TEMPERATURE_TYPE_LABELS } from '../../types'
+import { VEHICLE_TYPE_DEFAULTS, SELECTABLE_VEHICLE_TYPES, TEMPERATURE_COLORS, TEMPERATURE_TYPE_LABELS } from '../../types'
 import { getDisabledMonoTemps } from '../../utils/temperatureUtils'
 
 interface VehicleSelectorProps {
@@ -17,7 +17,8 @@ interface VehicleSelectorProps {
   blockedVehicleTypes?: Map<VehicleType, string>
 }
 
-const VEHICLE_TYPES = Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]
+/* Seuls les gabarits proposés à la saisie (#65) : CITY est écarté. */
+const VEHICLE_TYPES = SELECTABLE_VEHICLE_TYPES
 
 const ALL_TEMP_TYPES: TemperatureType[] = ['SEC', 'FRAIS', 'GEL', 'BI_TEMP', 'TRI_TEMP']
 

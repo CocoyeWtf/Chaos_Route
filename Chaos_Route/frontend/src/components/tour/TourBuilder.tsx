@@ -19,7 +19,7 @@ import { create } from '../../services/api'
 import api from '../../services/api'
 import type { VehicleType, TemperatureType, TemperatureClass, Volume, PDV, BaseLogistics, Tour, TourStop, DistanceEntry, Contract, PdvPickupSummary, Supplier } from '../../types'
 import type { PdvVolumeStatus } from '../map/PdvMarker'
-import { VEHICLE_TYPE_DEFAULTS, TEMPERATURE_TYPE_LABELS } from '../../types'
+import { VEHICLE_TYPE_DEFAULTS, SELECTABLE_VEHICLE_TYPES, TEMPERATURE_TYPE_LABELS } from '../../types'
 import { getRequiredTemperatureType, checkTemperatureCompatibility } from '../../utils/temperatureUtils'
 import { getApiErrorMessage } from '../../utils/apiError'
 
@@ -1174,7 +1174,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                 style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               >
                 <option value="">-- Type --</option>
-                {(Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]).map((vt) => (
+                {SELECTABLE_VEHICLE_TYPES.map((vt) => (
                   <option key={vt} value={vt}>{VEHICLE_TYPE_DEFAULTS[vt].label}</option>
                 ))}
               </select>
@@ -1450,7 +1450,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
             }}
           >
             {!selectedVehicleType && <option value="">{t('tourPlanning.selectVehicleType')}</option>}
-            {(Object.keys(VEHICLE_TYPE_DEFAULTS) as VehicleType[]).map((vt) => {
+            {SELECTABLE_VEHICLE_TYPES.map((vt) => {
               const blocked = blockedVehicleTypes.get(vt)
               return (
                 <option key={vt} value={vt} disabled={!!blocked} title={blocked}>

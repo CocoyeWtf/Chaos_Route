@@ -1492,6 +1492,18 @@ function TourRow({
                   onClick={(e) => e.stopPropagation()} />
               </div>
               <div className="min-w-0">
+                {/* Code Infolog du contrat (#61) : le postier l'a sous les yeux au
+                    moment d'encoder, à côté du numéro de semi. Il vient du contrat,
+                    il n'est donc pas saisissable ici. /
+                    Contract's Infolog code, shown next to the trailer number. */}
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>Code Infolog</label>
+                <input type="text" value={contract?.vehicle_code ?? ''} readOnly
+                  className="w-full min-w-0 px-1.5 py-1.5 rounded border text-xs"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+                  title="Code Infolog du véhicule, repris du contrat transporteur"
+                  onClick={(e) => e.stopPropagation()} />
+              </div>
+              <div className="min-w-0">
                 <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>Porte quai</label>
                 <input type="text" value={form.dock_door_number} onChange={(e) => onFormChange('dock_door_number', e.target.value)}
                   className="w-full min-w-0 px-1.5 py-1.5 rounded border text-xs"

@@ -38,6 +38,13 @@ class VehicleType(str, enum.Enum):
     PORTEUR = "PORTEUR"
     PORTEUR_SURBAISSE = "PORTEUR_SURBAISSE"
     PORTEUR_REMORQUE = "PORTEUR_REMORQUE"
+    # Semi courte (#65) : gabarit distinct, à autoriser point de vente par point
+    # de vente comme les autres. / Short trailer, allowed per PDV like the rest.
+    SEMI_COURTE = "SEMI_COURTE"
+    # CITY n'est plus proposé à la saisie (#65) mais la valeur reste : trois
+    # tournées et 144 points de vente y font encore référence, et les retirer de
+    # l'énumération rendrait ces enregistrements illisibles. /
+    # CITY is no longer offered but stays in the enum: existing records use it.
     CITY = "CITY"
     VL = "VL"
 

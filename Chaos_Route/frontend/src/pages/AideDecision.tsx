@@ -2,6 +2,7 @@
    Simulation pure : génère un plan affiché en tableau, sans créer de tours ni consommer de volumes. */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import * as XLSX from 'xlsx'
 import {
   DndContext,
   closestCenter,
@@ -173,6 +174,64 @@ export default function AideDecision() {
 
   /* Résultat / Result */
   const [result, setResult] = useState<AideDecisionResponse | null>(null)
+
+  /* Export Excel de la simulation affichée (#42) : une feuille « Tours » avec
+     une ligne par tournée suggérée, une feuille « Arrêts » avec le détail point
+     de vente par point de vente, et une feuille des points de vente non placés —
+     c'est souvent celle-là qui déclenche une décision. /
+     Excel export of the displayed simulation: tours, stops, and — often the most
+     useful — the PDVs that could not be placed. */
+  const exportSimulation = useCallback(() => {
+    if (!result) return
+    const wb = XLSX.utils.book_new()
+
+    const lignesTours = result.tours.map((tr) => ({
+      'Tour': tr.tour_number,
+      'Contrat': tr.contract?.contract_code ?? '',
+      'Transporteur': tr.contract?.transporter_name ?? '',
+      'Véhicule': tr.contract?.vehicle_type ?? '',
+      'Arrêts': tr.stops.length,
+      'EQC': tr.total_eqp,
+      'Poids (kg)': tr.total_weight_kg,
+      'Km': tr.total_km,
+      'Coût (€)': tr.total_cost,
+      'Départ': tr.departure_time ?? '',
+      'Retour': tr.return_time ?? '',
+      'Durée (min)': tr.total_duration_minutes,
+      'Avertissements': tr.warnings.join(' ; '),
+    }))
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lignesTours), 'Tours')
+
+    const lignesArrets = result.tours.flatMap((tr) =>
+      tr.stops.map((st, i) => ({
+        'Tour': tr.tour_number,
+        'Ordre': i + 1,
+        'PDV': st.pdv_code,
+        'Nom': st.pdv_name,
+        'Ville': st.pdv_city ?? '',
+        'EQC': st.eqp_count,
+        'Arrivée': st.arrival_time ?? '',
+        'Départ': st.departure_time ?? '',
+        'Km depuis précédent': st.distance_from_previous_km ?? '',
+      })),
+    )
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lignesArrets), 'Arrêts')
+
+    if (result.unassigned_pdvs.length > 0) {
+      const lignesNonPlaces = result.unassigned_pdvs.map((p) => ({
+        'PDV': p.pdv_code,
+        'Nom': p.pdv_name,
+        'Ville': p.pdv_city ?? '',
+        'EQC': p.eqp_count,
+        'Raison': p.reason,
+      }))
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lignesNonPlaces), 'Non placés')
+    }
+
+    const nom = `aide_decision_${result.dispatch_date}_${result.base_name}_${result.temperature_class}`
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+    XLSX.writeFile(wb, `${nom}.xlsx`)
+  }, [result])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -415,13 +474,29 @@ export default function AideDecision() {
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
               Tours suggérés — {result.base_name} — {result.temperature_class} — {result.dispatch_date}
             </h2>
-            <button
-              onClick={expandAll}
-              className="text-xs px-2 py-1 rounded"
-              style={{ color: 'var(--color-primary)', backgroundColor: 'var(--bg-tertiary)' }}
-            >
-              {expandedTours.size === result.tours.length ? 'Tout replier' : 'Tout déplier'}
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Export de la simulation (#42). Il part du résultat affiché plutôt
+                  que d'interroger le serveur : relancer le calcul renverrait une
+                  proposition potentiellement différente de celle qu'on a sous les
+                  yeux, ce qui n'aurait aucun sens pour un export. /
+                  Exports what is on screen: re-running the simulation could
+                  return a different plan than the one being looked at. */}
+              <button
+                onClick={exportSimulation}
+                className="text-xs px-2 py-1 rounded font-semibold"
+                style={{ color: '#fff', backgroundColor: 'var(--color-success)' }}
+                title="Exporter la simulation affichée en Excel"
+              >
+                Export Excel
+              </button>
+              <button
+                onClick={expandAll}
+                className="text-xs px-2 py-1 rounded"
+                style={{ color: 'var(--color-primary)', backgroundColor: 'var(--bg-tertiary)' }}
+              >
+                {expandedTours.size === result.tours.length ? 'Tout replier' : 'Tout déplier'}
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--border-color)' }}>

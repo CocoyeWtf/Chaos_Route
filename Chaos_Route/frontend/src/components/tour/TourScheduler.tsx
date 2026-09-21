@@ -97,6 +97,13 @@ function savePrefs(p: SchedulerPrefs) {
 
 /* --- Composant principal / Main component --- */
 
+/* Modes de tri de la liste. Km et durée ajoutés pour le ticket #81 (les AT
+   trient les tours à planifier pour décider quoi confier à qui). /
+   List sort modes; km and duration added for #81. */
+type SortMode =
+  | 'departure' | 'asc' | 'desc' | 'priority'
+  | 'km-asc' | 'km-desc' | 'duration-asc' | 'duration-desc'
+
 interface TourSchedulerProps {
   selectedDate: string
   onDateChange: (date: string) => void
@@ -196,7 +203,13 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   /* Tri chauffeur / Driver sort */
   /* Mode de tri de la liste : heure de départ, chauffeur A→Z / Z→A, ou ordre
      (priorité manuelle 1→n). / List sort mode. */
-  const [sortMode, setSortMode] = useState<'departure' | 'asc' | 'desc' | 'priority'>('asc')
+  const [sortMode, setSortMode] = useState<SortMode>('asc')
+
+  /* Plages de filtrage (#81) : km, durée (minutes) et heure de départ. Vide =
+     pas de borne. / Range filters: km, duration (minutes), departure time. */
+  const [kmRange, setKmRange] = useState<{ min: string; max: string }>({ min: '', max: '' })
+  const [durationRange, setDurationRange] = useState<{ min: string; max: string }>({ min: '', max: '' })
+  const [departureRange, setDepartureRange] = useState<{ from: string; to: string }>({ from: '', to: '' })
 
   /* Expansion boites / Box expansion */
   const [expandedTourIds, setExpandedTourIds] = useState<Set<number>>(new Set())
@@ -219,10 +232,10 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     return idx
   }, [distances])
 
-  const getDistance = (fromType: string, fromId: number, toType: string, toId: number): DistanceEntry | undefined => {
+  const getDistance = useCallback((fromType: string, fromId: number, toType: string, toId: number): DistanceEntry | undefined => {
     return distanceIndex.get(`${fromType}:${fromId}->${toType}:${toId}`)
       || distanceIndex.get(`${toType}:${toId}->${fromType}:${fromId}`)
-  }
+  }, [distanceIndex])
 
   const pdvMap = useMemo(() => new Map(pdvs.map((p) => [p.id, p])), [pdvs])
 
@@ -398,6 +411,61 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     return Array.from(names).sort()
   }, [timeline])
 
+  /* Durée d'un tour, estimée client-side (#81). La durée réelle n'est calculée
+     par le serveur qu'au moment où l'heure de départ est posée : sur les tours
+     restant à planifier — justement ceux que l'AT trie pour décider quoi donner
+     à qui — elle est vide. Ce calcul reprend celui du serveur (trajets du
+     distancier + temps de quai + déchargement par EQC + retour base) et ne
+     dépend pas de l'heure de départ, donc il s'applique aussi avant
+     ordonnancement. / Client-side tour duration: mirrors the server computation
+     and does not depend on the departure time, so unscheduled tours get one too. */
+  const estimateDurationMinutes = useCallback((tour: Tour): { minutes: number; missingLegs: number } | null => {
+    if (!tour.stops || tour.stops.length === 0) return null
+    let total = 0
+    /* Un trajet absent du distancier compte 0 et sous-évalue la durée : on le
+       compte pour le signaler au lieu de laisser croire au chiffre (13 tours
+       concernés en production). / Missing distance legs count as 0 and
+       understate the duration: track them so the UI can flag the estimate. */
+    let missingLegs = 0
+    let prevType = 'BASE'
+    let prevId = tour.base_id
+
+    const sortedStops = [...tour.stops].sort((a, b) => a.sequence_order - b.sequence_order)
+
+    for (const stop of sortedStops) {
+      const leg = getDistance(prevType, prevId, 'PDV', stop.pdv_id)
+      if (!leg) missingLegs++
+      total += leg?.duration_minutes ?? 0
+
+      const pdv = pdvMap.get(stop.pdv_id)
+      const dockTime = pdv?.dock_time_minutes ?? DEFAULT_DOCK_TIME
+      const unloadPerEqp = pdv?.unload_time_per_eqp_minutes ?? DEFAULT_UNLOAD_PER_EQP
+      total += dockTime + stop.eqp_count * unloadPerEqp
+
+      prevType = 'PDV'
+      prevId = stop.pdv_id
+    }
+
+    /* Retour base / Return to base */
+    const lastStop = sortedStops[sortedStops.length - 1]
+    const back = getDistance('PDV', lastStop.pdv_id, 'BASE', tour.base_id)
+    if (!back) missingLegs++
+    total += back?.duration_minutes ?? 0
+
+    return { minutes: Math.round(total), missingLegs }
+  }, [getDistance, pdvMap])
+
+  /* Durée à afficher / trier : la réelle si le serveur l'a calculée, sinon
+     l'estimation (signalée par `estimated`). / Duration used for display and
+     sorting: the stored one when present, else the estimate. */
+  const tourDuration = useCallback((tour: Tour): { minutes: number | null; estimated: boolean; missingLegs: number } => {
+    if (tour.total_duration_minutes) {
+      return { minutes: tour.total_duration_minutes, estimated: false, missingLegs: 0 }
+    }
+    const est = estimateDurationMinutes(tour)
+    return { minutes: est?.minutes ?? null, estimated: true, missingLegs: est?.missingLegs ?? 0 }
+  }, [estimateDurationMinutes])
+
   /* Filtrer par tous les critères cumulés / Filter by all cumulated criteria */
   const filteredTours = useMemo(() => {
     let result = tours
@@ -418,8 +486,43 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     if (contractFilters.size > 0) {
       result = result.filter(t => t.contract_id != null && contractFilters.has(t.contract_id))
     }
+    /* Plages km / durée / heure de départ (#81). Une borne vide ne filtre pas.
+       Un tour sans valeur mesurable est écarté dès qu'une borne est posée : on
+       ne peut pas affirmer qu'il entre dans la plage demandée. /
+       Range filters; a tour without a measurable value is excluded as soon as a
+       bound is set. */
+    const kmMin = kmRange.min === '' ? null : Number(kmRange.min)
+    const kmMax = kmRange.max === '' ? null : Number(kmRange.max)
+    if (kmMin != null || kmMax != null) {
+      result = result.filter(t => {
+        const km = t.total_km
+        if (km == null) return false
+        if (kmMin != null && km < kmMin) return false
+        if (kmMax != null && km > kmMax) return false
+        return true
+      })
+    }
+    const durMin = durationRange.min === '' ? null : Number(durationRange.min)
+    const durMax = durationRange.max === '' ? null : Number(durationRange.max)
+    if (durMin != null || durMax != null) {
+      result = result.filter(t => {
+        const { minutes } = tourDuration(t)
+        if (minutes == null) return false
+        if (durMin != null && minutes < durMin) return false
+        if (durMax != null && minutes > durMax) return false
+        return true
+      })
+    }
+    if (departureRange.from || departureRange.to) {
+      result = result.filter(t => {
+        if (!t.departure_time) return false
+        if (departureRange.from && t.departure_time < departureRange.from) return false
+        if (departureRange.to && t.departure_time > departureRange.to) return false
+        return true
+      })
+    }
     return result
-  }, [tours, showValidated, onlyToPlan, activityFilter, driverFilter, baseFilter, tourVehicleMap, vehicleTypeFilters, modeFilters, contractFilters])
+  }, [tours, showValidated, onlyToPlan, activityFilter, driverFilter, baseFilter, tourVehicleMap, vehicleTypeFilters, modeFilters, contractFilters, kmRange, durationRange, departureRange, tourDuration])
 
   /* Bases d'origine présentes dans les tours du jour (ticket #20) / Origin bases present in today's tours */
   const availableBases = useMemo(() => {
@@ -451,6 +554,23 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
       })
     }
 
+    /* Tri par km ou par durée (#81). Les tours sans valeur passent en fin de
+       liste dans les deux sens, plutôt que de polluer le haut du classement. /
+       Km and duration sorts; valueless tours always land last. */
+    if (sortMode.startsWith('km-') || sortMode.startsWith('duration-')) {
+      const desc = sortMode.endsWith('-desc')
+      const valueOf = (t: Tour): number | null =>
+        sortMode.startsWith('km-') ? (t.total_km ?? null) : tourDuration(t).minutes
+      return [...filteredTours].sort((a, b) => {
+        const va = valueOf(a)
+        const vb = valueOf(b)
+        if (va == null && vb == null) return byDeparture(a, b)
+        if (va == null) return 1
+        if (vb == null) return -1
+        return va !== vb ? (desc ? vb - va : va - vb) : byDeparture(a, b)
+      })
+    }
+
     /* Modes chauffeur (asc/desc) → regroupement par véhicule/chauffeur / Driver modes */
     const driverSort = sortMode === 'asc' || sortMode === 'desc' ? sortMode : null
     if (driverSort) {
@@ -476,7 +596,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     const unscheduled = filteredTours.filter(t => !t.departure_time)
       .sort((a, b) => a.id - b.id)
     return [...scheduled, ...unscheduled]
-  }, [filteredTours, sortMode, tourVehicleMap])
+  }, [filteredTours, sortMode, tourVehicleMap, tourDuration])
 
   /* Détecter les tours avec violation de fenêtre de livraison / Detect delivery window violations */
   const deliveryWindowViolations = useMemo(() => {
@@ -504,33 +624,10 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
 
   /* Estimation retour client-side / Client-side return estimation */
   const estimateReturn = (tour: Tour, departureTime: string): string | null => {
-    if (!departureTime || !tour.stops || tour.stops.length === 0) return null
-    let currentMin = parseTime(departureTime)
-    let prevType = 'BASE'
-    let prevId = tour.base_id
-
-    const sortedStops = [...tour.stops].sort((a, b) => a.sequence_order - b.sequence_order)
-
-    for (const stop of sortedStops) {
-      const dist = getDistance(prevType, prevId, 'PDV', stop.pdv_id)
-      const travelMin = dist?.duration_minutes ?? 0
-      currentMin += travelMin
-
-      const pdv = pdvMap.get(stop.pdv_id)
-      const dockTime = pdv?.dock_time_minutes ?? DEFAULT_DOCK_TIME
-      const unloadPerEqp = pdv?.unload_time_per_eqp_minutes ?? DEFAULT_UNLOAD_PER_EQP
-      currentMin += dockTime + stop.eqp_count * unloadPerEqp
-
-      prevType = 'PDV'
-      prevId = stop.pdv_id
-    }
-
-    /* Retour base / Return to base */
-    const lastStop = sortedStops[sortedStops.length - 1]
-    const retDist = getDistance('PDV', lastStop.pdv_id, 'BASE', tour.base_id)
-    currentMin += retDist?.duration_minutes ?? 0
-
-    return formatTime(currentMin)
+    if (!departureTime) return null
+    const duration = estimateDurationMinutes(tour)
+    if (duration == null) return null
+    return formatTime(parseTime(departureTime) + duration.minutes)
   }
 
   /* Convertir HH:MM en minutes, en gérant le retour le lendemain /
@@ -1302,12 +1399,16 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
             className="px-2 py-2 text-xs rounded-lg border"
             style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
             value={sortMode}
-            onChange={(e) => setSortMode(e.target.value as 'departure' | 'asc' | 'desc' | 'priority')}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
           >
             <option value="departure">Heure de départ</option>
             <option value="asc">Chauffeur A→Z</option>
             <option value="desc">Chauffeur Z→A</option>
             <option value="priority">Ordre (priorité)</option>
+            <option value="km-asc">Km croissants</option>
+            <option value="km-desc">Km décroissants</option>
+            <option value="duration-asc">Durée croissante</option>
+            <option value="duration-desc">Durée décroissante</option>
           </select>
         </div>
 
@@ -1501,6 +1602,81 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
             )}
 
             {/* Statut — une colonne (2 toggles empilés) */}
+            {/* Plages km / durée / heure de départ (#81) — les AT trient et
+                filtrent les tours à confier par kilométrage, durée ou créneau. */}
+            <FilterGroup label="Plage">
+              <div className="flex flex-col gap-1" style={{ width: '168px' }}>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] w-10 shrink-0" style={{ color: 'var(--text-muted)' }}>Km</span>
+                  <input
+                    type="number" min="0" inputMode="numeric" placeholder="min"
+                    className="w-full px-1.5 py-1 text-[11px] rounded border"
+                    style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    value={kmRange.min}
+                    onChange={(e) => setKmRange(r => ({ ...r, min: e.target.value }))}
+                  />
+                  <input
+                    type="number" min="0" inputMode="numeric" placeholder="max"
+                    className="w-full px-1.5 py-1 text-[11px] rounded border"
+                    style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    value={kmRange.max}
+                    onChange={(e) => setKmRange(r => ({ ...r, max: e.target.value }))}
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] w-10 shrink-0" style={{ color: 'var(--text-muted)' }} title="Durée en minutes (600 = 10h)">Durée</span>
+                  <input
+                    type="number" min="0" step="15" inputMode="numeric" placeholder="min"
+                    className="w-full px-1.5 py-1 text-[11px] rounded border"
+                    style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    value={durationRange.min}
+                    onChange={(e) => setDurationRange(r => ({ ...r, min: e.target.value }))}
+                    title="Durée minimum, en minutes (600 = 10h)"
+                  />
+                  <input
+                    type="number" min="0" step="15" inputMode="numeric" placeholder="max"
+                    className="w-full px-1.5 py-1 text-[11px] rounded border"
+                    style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    value={durationRange.max}
+                    onChange={(e) => setDurationRange(r => ({ ...r, max: e.target.value }))}
+                    title="Durée maximum, en minutes (600 = 10h)"
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] w-10 shrink-0" style={{ color: 'var(--text-muted)' }}>Départ</span>
+                  <input
+                    type="time"
+                    className="w-full px-1 py-1 text-[11px] rounded border"
+                    style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    value={departureRange.from}
+                    onChange={(e) => setDepartureRange(r => ({ ...r, from: e.target.value }))}
+                    title="Départ à partir de — les tours sans heure sont masqués"
+                  />
+                  <input
+                    type="time"
+                    className="w-full px-1 py-1 text-[11px] rounded border"
+                    style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    value={departureRange.to}
+                    onChange={(e) => setDepartureRange(r => ({ ...r, to: e.target.value }))}
+                    title="Départ jusqu'à — les tours sans heure sont masqués"
+                  />
+                </div>
+                {(kmRange.min || kmRange.max || durationRange.min || durationRange.max || departureRange.from || departureRange.to) && (
+                  <button
+                    className={CHIP}
+                    style={{ borderColor: 'var(--color-primary)', backgroundColor: 'rgba(249,115,22,0.12)', color: 'var(--color-primary)' }}
+                    onClick={() => {
+                      setKmRange({ min: '', max: '' })
+                      setDurationRange({ min: '', max: '' })
+                      setDepartureRange({ from: '', to: '' })
+                    }}
+                  >
+                    ✕ Effacer les plages
+                  </button>
+                )}
+              </div>
+            </FilterGroup>
+
             <FilterGroup label="Statut">
               <div className="grid grid-cols-1 gap-1" style={{ width: '124px' }}>
                 <button
@@ -1777,6 +1953,26 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                         <span className="text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
                           {tour.total_km ?? 0} km
                         </span>
+                        {/* Durée — « ~ » quand elle est estimée, le serveur ne la
+                            calculant qu'à la pose de l'heure de départ (#81). */}
+                        {(() => {
+                          const { minutes, estimated, missingLegs } = tourDuration(tour)
+                          if (minutes == null) return null
+                          const title = !estimated
+                            ? 'Durée calculée à l’ordonnancement'
+                            : missingLegs > 0
+                              ? `Durée estimée, mais ${missingLegs} trajet(s) absent(s) du distancier : la durée réelle est plus longue`
+                              : 'Durée estimée (trajets, quai, déchargement, retour base)'
+                          return (
+                            <span
+                              className="text-[10px] shrink-0"
+                              style={{ color: estimated && missingLegs > 0 ? 'var(--color-danger)' : 'var(--text-muted)' }}
+                              title={title}
+                            >
+                              {estimated ? '~' : ''}{formatDuration(minutes)}{estimated && missingLegs > 0 ? ' ⚠' : ''}
+                            </span>
+                          )
+                        })()}
 
                         {/* Badge statut pour planifiés / Status badge for scheduled */}
                         {isScheduled && (

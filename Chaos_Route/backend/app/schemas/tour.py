@@ -1,6 +1,6 @@
 """Schémas Tour / Tour schemas."""
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.contract import VehicleType
 from app.models.tour import TourStatus, TourType
@@ -34,6 +34,16 @@ class TourStopInsert(BaseModel):
     pickup_containers: bool = False
     pickup_returns: bool = False
     pickup_consignment: bool = False
+
+
+class TourStopUpdate(BaseModel):
+    """Correction d'un arrêt existant depuis l'onglet postier (ticket #37).
+
+    Seule la quantité est modifiable : le postier constate la charge réelle au
+    quai. C'est la même sémantique opérationnelle que l'EQC saisie à l'ajout
+    d'un PDV — la quantité n'est pas recalculée depuis les volumes rattachés.
+    """
+    eqp_count: float = Field(ge=0, le=999)
 
 
 class TourStopRead(TourStopBase):

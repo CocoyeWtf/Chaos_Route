@@ -29,7 +29,7 @@ from app.models.user import User
 from app.models.pickup_request import PickupRequest, PickupLabel, PickupStatus, PickupType, LabelStatus
 from app.models.vehicle import Vehicle, FleetVehicleType, VehicleStatus
 from app.models.tour_manifest_line import TourManifestLine
-from app.schemas.tour import ManifestLineRead, ReorderStopsRequest, TourCreate, TourGateUpdate, TourOperationsUpdate, TourRead, TourSchedule, TourStopInsert, TourUpdate
+from app.schemas.tour import ManifestLineRead, ReorderStopsRequest, TourCreate, TourGateUpdate, TourOperationsUpdate, TourRead, TourSchedule, TourStopInsert, TourStopUpdate, TourUpdate
 from app.api.deps import require_permission, get_user_region_ids
 from app.utils.fuel_pricing import load_fuel_unit_prices, price_for_contract, contract_fuel_type
 from app.services.cmro_extraction import CMRO_COLUMNS, CMRO_FIELDS, build_row as _build_cmro_row
@@ -3121,6 +3121,66 @@ async def _recalc_tour_after_stop_change(db: AsyncSession, tour: Tour) -> dict:
 
     await db.flush()
     return {"warnings": warnings}
+
+
+@router.patch("/{tour_id}/stops/{stop_id}", response_model=TourRead)
+async def update_tour_stop(
+    tour_id: int,
+    stop_id: int,
+    data: TourStopUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-stop-modify", "update")),
+):
+    """Corriger la quantité d'un arrêt depuis l'onglet postier (ticket #37).
+
+    Le postier pouvait ajouter un PDV avec ses EQC et en retirer un, mais pas
+    corriger la quantité d'un arrêt déjà présent : sur une tournée à un seul
+    PDV, il n'avait donc aucun moyen d'ajuster la charge, puisque le PDV était
+    exclu de la liste d'ajout. C'est une correction OPÉRATIONNELLE — la charge
+    réellement constatée au quai — de même nature que l'EQC saisie à l'ajout
+    d'un PDV : les volumes rattachés ne sont pas redécoupés. /
+    Fix an existing stop's quantity: an operational correction, like the EQC
+    entered when adding a PDV; attached volumes are not re-split.
+    """
+    tour = await db.get(Tour, tour_id, options=[selectinload(Tour.stops)])
+    if not tour:
+        raise HTTPException(404, "Tour not found")
+    if tour.departure_signal_time:
+        raise HTTPException(409, "Tour verrouillé : top départ validé")
+    if tour.status not in (TourStatus.DRAFT, TourStatus.VALIDATED):
+        raise HTTPException(409, f"Tour en statut {tour.status.value}, modification impossible")
+
+    target = next((s for s in tour.stops if s.id == stop_id), None)
+    if not target:
+        raise HTTPException(404, "Stop not found in this tour")
+
+    # Lire ce dont on a besoin AVANT le flush/refresh : après, toucher `target`
+    # déclenche un chargement paresseux, interdit en session asynchrone. /
+    # Read what we need before flush/refresh: touching `target` afterwards
+    # triggers a lazy load, which async sessions forbid.
+    before = float(target.eqp_count or 0)
+    pdv = await db.get(PDV, target.pdv_id)
+    pdv_code = pdv.code if pdv else None
+
+    target.eqp_count = data.eqp_count
+    await db.flush()
+
+    await db.refresh(tour, ["stops"])
+    result = await _recalc_tour_after_stop_change(db, tour)
+
+    await _log_audit(db, "tour", tour.id, "UPDATE_STOP", user, {
+        "stop_id": stop_id, "pdv_code": pdv_code,
+        "eqp_count_before": before, "eqp_count_after": float(data.eqp_count),
+    })
+
+    await db.flush()
+    refreshed = await db.execute(
+        select(Tour).where(Tour.id == tour.id).options(selectinload(Tour.stops))
+    )
+    tour_out = refreshed.scalar_one()
+    if result.get("warnings"):
+        logger.info("Stop %s du tour %s mis a jour: %s", stop_id, tour_id, result["warnings"])
+    return tour_out
 
 
 @router.delete("/{tour_id}/stops/{stop_id}", response_model=TourRead)

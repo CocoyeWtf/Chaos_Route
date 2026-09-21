@@ -65,6 +65,7 @@ export default function Operations() {
   const { t } = useTranslation()
   const { isFullscreen, toggleFullscreen } = useAppStore()
   const canModifyStops = useAuthStore((s) => s.hasPermission('tour-stop-modify', 'update'))
+  const canDeleteTour = useAuthStore((s) => s.hasPermission('tour-planning', 'delete'))
   const today = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(today)
   const [baseId, setBaseId] = useState<number | ''>('')
@@ -376,6 +377,49 @@ export default function Operations() {
     } catch (e: unknown) {
       const resp = (e as { response?: { status?: number; data?: { detail?: string } } })?.response
       alert(resp?.data?.detail || 'Erreur lors de l\'ajout du stop')
+    }
+  }
+
+  /* Corriger les EQC d'un arrêt (#37) / Fix a stop's EQC.
+     Le postier constate la charge réelle au quai ; sans cela, une tournée à un
+     seul PDV était figée, ce PDV étant exclu de la liste d'ajout. */
+  const handleUpdateStopEqc = async (tourId: number, stopId: number, eqpCount: number) => {
+    try {
+      await api.patch(`/tours/${tourId}/stops/${stopId}`, { eqp_count: eqpCount })
+      await loadTours(true)
+    } catch (e: unknown) {
+      const resp = (e as { response?: { data?: { detail?: string } } })?.response
+      alert(resp?.data?.detail || 'Erreur lors de la modification des EQC')
+    }
+  }
+
+  /* Réordonner les arrêts (#37) / Reorder stops */
+  const handleReorderStops = async (tourId: number, stopOrder: number[]) => {
+    try {
+      await api.put(`/tours/${tourId}/reorder-stops`, { stop_order: stopOrder })
+      await loadTours(true)
+    } catch (e: unknown) {
+      const resp = (e as { response?: { data?: { detail?: string } } })?.response
+      alert(resp?.data?.detail || 'Erreur lors du changement d\'ordre')
+    }
+  }
+
+  /* Supprimer la tournée (#37) / Delete the tour.
+     Seule sortie pour libérer les volumes : retirer les PDV un par un butait
+     sur le dernier, refusé par le serveur. */
+  const handleDeleteTour = async (tourId: number, code: string, stopCount: number) => {
+    if (!confirm(
+      `Supprimer définitivement la tournée ${code} ?\n\n`
+      + `Ses ${stopCount} point(s) de vente seront retirés et tous ses volumes `
+      + `redeviendront disponibles à la planification.\n`
+      + `Si un chauffeur a reçu cette tournée, prévenez-le : elle disparaîtra de son appareil.`
+    )) return
+    try {
+      await api.delete(`/tours/${tourId}`)
+      await loadTours(true)
+    } catch (e: unknown) {
+      const resp = (e as { response?: { data?: { detail?: string } } })?.response
+      alert(resp?.data?.detail || 'Erreur lors de la suppression de la tournée')
     }
   }
 
@@ -705,8 +749,12 @@ export default function Operations() {
                           onRefresh={() => loadTours(true)}
                           onPatchStopsEqc={(eqcByPdv) => patchTourStopsEqc(tour.id, eqcByPdv)}
                           canModifyStops={canModifyStops}
+                          canDeleteTour={canDeleteTour}
                           onRemoveStop={handleRemoveStop}
                           onAddStop={handleAddStop}
+                          onUpdateStopEqc={handleUpdateStopEqc}
+                          onReorderStops={handleReorderStops}
+                          onDeleteTour={handleDeleteTour}
                           pdvs={pdvs}
                         />
                       </tbody>
@@ -745,6 +793,41 @@ export default function Operations() {
 }
 
 /* ─── Composant ligne tour / Tour row component ─── */
+
+/* Saisie des EQC d'un arrêt (#37) / Inline stop EQC editor.
+   Validation à la sortie du champ ou sur Entrée, et uniquement si la valeur a
+   changé : on ne déclenche pas d'appel serveur au simple passage du curseur. */
+function EditableEqc({ value, onSave }: { value: number; onSave: (v: number) => void }) {
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => { setDraft(String(value)) }, [value])
+
+  const commit = () => {
+    const parsed = Number(draft)
+    if (!Number.isFinite(parsed) || parsed < 0) { setDraft(String(value)); return }
+    if (parsed === value) return
+    onSave(parsed)
+  }
+
+  return (
+    <input
+      type="number"
+      min={0}
+      step={0.5}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.currentTarget.blur() }
+        if (e.key === 'Escape') { setDraft(String(value)); e.currentTarget.blur() }
+      }}
+      onClick={(e) => e.stopPropagation()}
+      className="w-16 px-1 py-0.5 rounded border text-xs text-center"
+      style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+      title="EQC constatés — modifiable jusqu'au top départ"
+    />
+  )
+}
 
 /* Mini-composant pour ajouter un PDV dans un tour / Inline add-stop widget */
 function AddStopInline({ pdvs, tourStopPdvIds, onAdd }: { pdvs: PDV[]; tourStopPdvIds: Set<number>; onAdd: (pdvId: number, eqpCount: number) => void }) {
@@ -852,8 +935,12 @@ interface TourRowProps {
   onRefresh: () => Promise<void>
   onPatchStopsEqc: (eqcByPdv: Record<string, number>) => void
   canModifyStops: boolean
+  canDeleteTour: boolean
   onRemoveStop: (tourId: number, stopId: number, pdvCode: string, temps?: TemperatureClass[]) => void
   onAddStop: (tourId: number, pdvId: number, eqpCount: number) => void
+  onUpdateStopEqc: (tourId: number, stopId: number, eqpCount: number) => void
+  onReorderStops: (tourId: number, stopOrder: number[]) => void
+  onDeleteTour: (tourId: number, code: string, stopCount: number) => void
   pdvs: PDV[]
 }
 
@@ -861,11 +948,30 @@ function TourRow({
   tour, contract, form, isExpanded, color, pdvMap, volumes, saving, eqc, fleetVehicles,
   visibleCols, colCount, t,
   onToggle, onFormChange, onSave, onRouteSheet, onWaybill, onAssignDevice, onUnassignDevice, onSetNow, onLoaderLookup, onPatchStopsEqc,
-  canModifyStops, onRemoveStop, onAddStop, pdvs,
+  canModifyStops, canDeleteTour, onRemoveStop, onAddStop, pdvs,
+  onUpdateStopEqc, onReorderStops, onDeleteTour,
 }: TourRowProps) {
   const vehicleLabel = contract?.vehicle_code
     ? `${contract.vehicle_code} — ${contract.vehicle_name ?? ''}`
     : (contract?.code ?? '—')
+
+  /* Une tournée reste modifiable jusqu'au top départ (#37) : c'est la règle que
+     le serveur applique, l'écran s'y aligne au lieu de figer plus tôt. /
+     A tour stays editable until the departure signal — same rule as the server. */
+  const stopsEditable = canModifyStops && !tour.departure_signal_time
+    && (tour.status === 'DRAFT' || tour.status === 'VALIDATED')
+
+  const orderedStops = [...tour.estimated_stops].sort((a, b) => a.sequence_order - b.sequence_order)
+
+  /* Déplacer un arrêt d'un cran / Move a stop one position */
+  const moveStop = (index: number, delta: number) => {
+    const next = [...orderedStops]
+    const target = index + delta
+    if (target < 0 || target >= next.length) return
+    const [moved] = next.splice(index, 1)
+    next.splice(target, 0, moved)
+    onReorderStops(tour.id, next.map((s) => s.id))
+  }
 
   /* Rendu cellule / Cell render */
   const cells: Record<string, React.ReactNode> = {
@@ -961,9 +1067,8 @@ function TourRow({
                   </tr>
                 </thead>
                 <tbody>
-                  {tour.estimated_stops
-                    .sort((a, b) => a.sequence_order - b.sequence_order)
-                    .map((stop) => {
+                  {orderedStops
+                    .map((stop, stopIdx) => {
                       const pdv = pdvMap.get(stop.pdv_id)
                       const pickups = [
                         stop.pickup_cardboard && 'C',
@@ -1013,12 +1118,46 @@ function TourRow({
                           <td className="px-2 py-1 text-center font-mono font-semibold whitespace-nowrap" style={{ color: tour.delay_minutes > 0 ? color : 'var(--text-primary)' }}>
                             {stop.estimated_arrival ?? '—'}
                           </td>
-                          <td className="px-2 py-1 text-center whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>{stop.eqp_count}</td>
+                          {/* EQC corrigeables par le postier (#37) : sur une tournée à un
+                              seul PDV, c'était le seul moyen d'ajuster la charge, le PDV
+                              étant exclu de la liste d'ajout. */}
+                          <td className="px-2 py-1 text-center whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>
+                            {stopsEditable ? (
+                              <EditableEqc
+                                value={Number(stop.eqp_count)}
+                                onSave={(v) => onUpdateStopEqc(tour.id, stop.id, v)}
+                              />
+                            ) : stop.eqp_count}
+                          </td>
                           <td className="px-2 py-1 text-center whitespace-nowrap" style={{ color: pickups ? 'var(--color-primary)' : 'var(--text-muted)' }}>
                             {pickups || '—'}
                           </td>
-                          {canModifyStops && !tour.departure_signal_time && (tour.status === 'DRAFT' || tour.status === 'VALIDATED') && (
+                          {stopsEditable && (
                             <td className="px-2 py-1 text-center whitespace-nowrap">
+                              {/* Ordre de livraison modifiable (#37) : il ne l'était pas
+                                  une fois un PDV ajouté. */}
+                              {orderedStops.length > 1 && (
+                                <>
+                                  <button
+                                    className="text-[10px] px-1 py-0.5 rounded border mr-1 transition-all hover:opacity-80 disabled:opacity-25"
+                                    style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+                                    disabled={stopIdx === 0}
+                                    title="Monter dans l'ordre de livraison"
+                                    onClick={(e) => { e.stopPropagation(); moveStop(stopIdx, -1) }}
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    className="text-[10px] px-1 py-0.5 rounded border mr-2 transition-all hover:opacity-80 disabled:opacity-25"
+                                    style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+                                    disabled={stopIdx === orderedStops.length - 1}
+                                    title="Descendre dans l'ordre de livraison"
+                                    onClick={(e) => { e.stopPropagation(); moveStop(stopIdx, 1) }}
+                                  >
+                                    ↓
+                                  </button>
+                                </>
+                              )}
                               {tour.stops.length > 1 && (
                                 <button
                                   className="text-[10px] px-1.5 py-0.5 rounded border font-semibold transition-all hover:opacity-80"
@@ -1046,10 +1185,24 @@ function TourRow({
               </table>
             </div>
 
-            {/* Bouton ajouter PDV / Add PDV button */}
-            {canModifyStops && !tour.departure_signal_time && (tour.status === 'DRAFT' || tour.status === 'VALIDATED') && (
-              <AddStopInline pdvs={pdvs} tourStopPdvIds={new Set(tour.stops.map((s) => s.pdv_id))} onAdd={(pdvId, eqpCount) => onAddStop(tour.id, pdvId, eqpCount)} />
-            )}
+            {/* Ajouter un PDV / supprimer la tournée / Add PDV, delete tour */}
+            <div className="flex items-center gap-2">
+              {stopsEditable && (
+                <AddStopInline pdvs={pdvs} tourStopPdvIds={new Set(tour.stops.map((s) => s.pdv_id))} onAdd={(pdvId, eqpCount) => onAddStop(tour.id, pdvId, eqpCount)} />
+              )}
+              {/* Supprimer la tournée (#37) : sans ce bouton, retirer les PDV un
+                  par un butait sur le dernier et les volumes restaient bloqués. */}
+              {canDeleteTour && !tour.departure_signal_time && (
+                <button
+                  className="text-[10px] px-2 py-1 rounded border font-semibold transition-all hover:opacity-80 mb-2"
+                  style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)' }}
+                  title="Supprime la tournée et rend ses volumes à la planification"
+                  onClick={(e) => { e.stopPropagation(); onDeleteTour(tour.id, tour.code, tour.stops.length) }}
+                >
+                  Supprimer la tournée
+                </button>
+              )}
+            </div>
 
             {/* Ligne 1 — Prépa semi / Trailer preparation */}
             <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '2fr 0.8fr 1fr 1fr' }}>

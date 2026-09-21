@@ -15,3 +15,8 @@ class Loader(Base, TenantMixin):
     code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     base_id: Mapped[int] = mapped_column(ForeignKey("bases_logistics.id"), nullable=False)
+    # Seconde base, facultative (#63) : les chargeurs de Gosselies SEC chargent
+    # aussi pour Gosselies MEA. Rattacher plutôt que dupliquer la fiche évite
+    # deux chargeurs portant le même code. /
+    # Optional second base: one loader can serve two sites without duplicating.
+    secondary_base_id: Mapped[int | None] = mapped_column(ForeignKey("bases_logistics.id"))

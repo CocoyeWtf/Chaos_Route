@@ -14,6 +14,10 @@ type MapMessage =
   | { type: 'PDV_CLICK'; payload: PDV }
   | { type: 'PDV_TEMP_CLICK'; payload: { pdv: PDV; temp: string } }
   | { type: 'PDV_CONTEXTMENU'; payload: PDV }
+  /* Enregistrer le brouillon depuis la carte détachée (#75) : sur le tableau de
+     Villers, la carte occupe tout l'écran et revenir à l'autre fenêtre pour un
+     simple clic casse le rythme. / Save the draft from the detached map. */
+  | { type: 'SAVE_DRAFT' }
   | { type: 'MAP_CLOSING' }
 
 interface MapInitPayload {
@@ -120,5 +124,12 @@ export function useDetachedMapReceiver() {
     channelRef.current?.postMessage({ type: 'PDV_CONTEXTMENU', payload: pdv })
   }, [])
 
-  return { ...state, sendPdvClick, sendPdvTempClick, sendPdvContextMenu }
+  /* Demande l'enregistrement du brouillon à la fenêtre principale (#75).
+     C'est elle qui détient le tour en cours : la carte ne fait que le demander. /
+     Asks the main window to save the draft: it owns the tour being built. */
+  const sendSaveDraft = useCallback(() => {
+    channelRef.current?.postMessage({ type: 'SAVE_DRAFT' })
+  }, [])
+
+  return { ...state, sendPdvClick, sendPdvTempClick, sendPdvContextMenu, sendSaveDraft }
 }

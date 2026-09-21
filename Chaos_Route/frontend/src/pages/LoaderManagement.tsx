@@ -19,6 +19,17 @@ export default function LoaderManagement() {
       render: (row) => bases.find((b) => b.id === row.base_id)?.name || '—',
       filterValue: (row) => bases.find((b) => b.id === row.base_id)?.name || '',
     },
+    {
+      /* Seconde base facultative (#63) : un chargeur de Gosselies SEC charge
+         aussi pour Gosselies MEA, sans qu'on ait à créer une seconde fiche. */
+      key: 'secondary_base_id' as keyof Loader, label: 'Seconde base', width: '180px', filterable: true,
+      render: (row) => row.secondary_base_id
+        ? (bases.find((b) => b.id === row.secondary_base_id)?.name || '—')
+        : '—',
+      filterValue: (row) => row.secondary_base_id
+        ? (bases.find((b) => b.id === row.secondary_base_id)?.name || '')
+        : '',
+    },
   ]
 
   const fields: FieldDef[] = [
@@ -27,6 +38,11 @@ export default function LoaderManagement() {
     {
       key: 'base_id', label: 'Base', type: 'select', required: true,
       options: bases.map((b) => ({ value: String(b.id), label: `${b.code} — ${b.name}` })),
+    },
+    {
+      key: 'secondary_base_id', label: 'Seconde base (facultatif)', type: 'select',
+      options: [{ value: '', label: '— Aucune —' },
+        ...bases.map((b) => ({ value: String(b.id), label: `${b.code} — ${b.name}` }))],
     },
   ]
 
@@ -40,7 +56,13 @@ export default function LoaderManagement() {
       searchKeys={['code', 'name']}
       createTitle="Nouveau chargeur"
       editTitle="Modifier chargeur"
-      transformPayload={(d) => ({ ...d, base_id: Number(d.base_id) })}
+      transformPayload={(d) => ({
+        ...d,
+        base_id: Number(d.base_id),
+        /* Chaîne vide = aucune seconde base : on envoie null et non 0, sinon le
+           serveur chercherait une base inexistante. / Empty means none. */
+        secondary_base_id: d.secondary_base_id ? Number(d.secondary_base_id) : null,
+      })}
     />
   )
 }

@@ -14,6 +14,10 @@ type MapMessage =
   | { type: 'PDV_CLICK'; payload: PDV }
   | { type: 'PDV_TEMP_CLICK'; payload: { pdv: PDV; temp: string } }
   | { type: 'PDV_CONTEXTMENU'; payload: PDV }
+  /* Enregistrer le brouillon depuis la carte détachée (#75) : sur le tableau de
+     Villers, la carte occupe tout l'écran et revenir à l'autre fenêtre pour un
+     simple clic casse le rythme. / Save the draft from the detached map. */
+  | { type: 'SAVE_DRAFT' }
   | { type: 'MAP_CLOSING' }
 
 interface MapInitPayload {
@@ -45,6 +49,8 @@ interface UseDetachedMapOptions {
   onPdvClick: (pdv: PDV) => void
   onPdvTempClick?: (pdv: PDV, temp: string) => void
   onPdvContextMenu?: (pdv: PDV) => void
+  /* Enregistrement du brouillon demandé depuis la carte détachée (#75) */
+  onSaveDraft?: () => void
 }
 
 export function useDetachedMap({
@@ -58,6 +64,7 @@ export function useDetachedMap({
   onPdvClick,
   onPdvTempClick,
   onPdvContextMenu,
+  onSaveDraft,
 }: UseDetachedMapOptions) {
   const [isDetached, setIsDetached] = useState(false)
   const channelRef = useRef<BroadcastChannel | null>(null)
@@ -71,6 +78,8 @@ export function useDetachedMap({
   onPdvTempClickRef.current = onPdvTempClick
   const onPdvContextMenuRef = useRef(onPdvContextMenu)
   onPdvContextMenuRef.current = onPdvContextMenu
+  const onSaveDraftRef = useRef(onSaveDraft)
+  useEffect(() => { onSaveDraftRef.current = onSaveDraft }, [onSaveDraft])
   const themeRef = useRef(theme)
   themeRef.current = theme
   const regionIdRef = useRef(regionId)
@@ -110,6 +119,8 @@ export function useDetachedMap({
         onPdvTempClickRef.current?.(msg.payload.pdv, msg.payload.temp)
       } else if (msg.type === 'PDV_CONTEXTMENU') {
         onPdvContextMenuRef.current?.(msg.payload)
+      } else if (msg.type === 'SAVE_DRAFT') {
+        onSaveDraftRef.current?.()
       } else if (msg.type === 'MAP_CLOSING') {
         setIsDetached(false)
       }

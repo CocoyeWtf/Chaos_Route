@@ -22,7 +22,12 @@ async def list_loaders(
     """Liste des chargeurs, filtrable par base / List loaders, filterable by base."""
     query = select(Loader)
     if base_id is not None:
-        query = query.where(Loader.base_id == base_id)
+        # Le chargeur ressort sur sa base principale ET sur sa base secondaire
+        # (#63) : sans cela, le rattachement double ne servirait à rien. /
+        # A loader shows up under both of its bases.
+        query = query.where(
+            (Loader.base_id == base_id) | (Loader.secondary_base_id == base_id)
+        )
     result = await db.execute(query)
     return result.scalars().all()
 

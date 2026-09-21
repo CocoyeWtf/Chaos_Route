@@ -1,6 +1,6 @@
 /* Constructeur de tour (Phase Construction) / Tour builder (Construction phase — PDV first, vehicle after) */
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useApi } from '../../hooks/useApi'
 import { useTour } from '../../hooks/useTour'
@@ -787,7 +787,16 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
     onPdvClick: handlePdvClick,
     onPdvTempClick: handlePdvTempClick,
     onPdvContextMenu: handlePdvContextMenu,
+    /* Enregistrer le brouillon depuis la carte plein écran (#75) : sur le
+       tableau de Villers, changer de fenêtre pour un simple clic casse le
+       rythme de construction. On passe par une référence : l'enregistrement est
+       défini plus bas, et le hook ne doit pas capturer une version périmée. /
+       Save the draft from the full-screen map, via a ref to avoid a stale copy. */
+    onSaveDraft: () => handleValidateRef.current(),
   })
+
+  /* Référence vers l'enregistrement du brouillon, pour la carte détachée (#75) */
+  const handleValidateRef = useRef<() => void>(() => {})
 
   /* Sauvegarder comme brouillon (sans contrat) / Save as draft (no contract) */
   const handleValidate = async () => {
@@ -835,6 +844,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       setSaving(false)
     }
   }
+
+  useEffect(() => { handleValidateRef.current = handleValidate })
 
   /* Créer un tour mouvement (déplacement base / garage, sans arrêt) ou transfert
      PDV à PDV (2 arrêts : origine = chargement, destination = dépose) /

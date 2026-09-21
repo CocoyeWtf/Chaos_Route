@@ -247,6 +247,8 @@ export interface Tour {
 }
 
 export interface Loader {
+  /* Seconde base de rattachement, facultative (#63) */
+  secondary_base_id?: number | null
   id: number
   code: string
   name: string

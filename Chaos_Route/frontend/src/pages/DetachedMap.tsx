@@ -6,7 +6,7 @@ import { useAppStore } from '../stores/useAppStore'
 import { MapView } from '../components/map/MapView'
 
 export default function DetachedMap() {
-  const { ready, theme, regionId, selectedPdvIds, pdvVolumeStatusMap, pdvEqpMap, routeCoords, pickupByPdv, sendPdvClick, sendPdvTempClick, sendPdvContextMenu } =
+  const { ready, theme, regionId, selectedPdvIds, pdvVolumeStatusMap, pdvEqpMap, routeCoords, pickupByPdv, sendPdvClick, sendPdvTempClick, sendPdvContextMenu, sendSaveDraft } =
     useDetachedMapReceiver()
 
   const { setSelectedRegion } = useAppStore()
@@ -39,7 +39,20 @@ export default function DetachedMap() {
   }
 
   return (
-    <div style={{ width: '100vw', height: '100vh' }}>
+    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
+      {/* Enregistrer le brouillon sans quitter la carte (#75). Le bouton est
+          posé au-dessus de la carte, en bas à droite pour ne pas masquer la
+          légende, et l'enregistrement est exécuté par la fenêtre principale,
+          seule à connaître le tour en cours. /
+          Save the draft without leaving the map: the main window does the work. */}
+      <button
+        onClick={sendSaveDraft}
+        className="absolute bottom-4 right-4 px-4 py-2 rounded-lg text-sm font-semibold text-white shadow-lg"
+        style={{ backgroundColor: 'var(--color-primary)', zIndex: 1100 }}
+        title="Enregistrer le brouillon du tour en cours"
+      >
+        Enregistrer le brouillon
+      </button>
       <MapView
         onPdvClick={sendPdvClick}
         onPdvTempClick={sendPdvTempClick}

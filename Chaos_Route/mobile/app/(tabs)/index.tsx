@@ -133,23 +133,46 @@ export default function TourListScreen() {
     }
   }, [assigning, loadTours, loadAvailable])
 
-  /* Scanner QR affectation / Scan QR for assignment */
+  /* Scanner une affectation / Scan an assignment.
+     Deux formats acceptes (#51) :
+     - le QR genere par le postier, « TOUR:123 » ;
+     - le CODE-BARRES deja imprime sur la feuille de route, qui porte le code de
+       la tournee. Les tournees de nuit partent sans contact avec le postier :
+       le chauffeur a la feuille de route en main, pas l'ecran du postier. /
+     Accepts the postier's QR and the barcode already printed on the route
+     sheet, so night drivers can self-assign without meeting anyone. */
   const handleQrScanned = useCallback(({ data: qrData }: { data: string }) => {
     if (scannedRef.current || assigning) return
     scannedRef.current = true
 
-    // Format attendu : "TOUR:123" / Expected format: "TOUR:123"
-    const match = qrData.match(/^TOUR:(\d+)$/)
-    if (!match) {
-      Alert.alert('QR invalide', 'Format attendu: TOUR:xxx', [
-        { text: 'Re-scanner', onPress: () => { scannedRef.current = false } },
-        { text: 'Fermer', onPress: () => { setShowScanner(false); scannedRef.current = false; setTorchOn(false) } },
-      ])
+    const lu = qrData.trim()
+
+    const match = lu.match(/^TOUR:(\d+)$/)
+    if (match) {
+      doAssign(Number(match[1]))
       return
     }
 
-    doAssign(Number(match[1]))
-  }, [assigning, doAssign])
+    // Code-barres de la feuille de route : on resout le code sur la liste des
+    // tournees disponibles, deja chargee — pas d'appel reseau supplementaire.
+    const parCode = availableTours.find((t) => t.code === lu)
+      || tours.find((t) => t.code === lu)
+    if (parCode) {
+      doAssign(parCode.id)
+      return
+    }
+
+    Alert.alert(
+      'Code non reconnu',
+      `« ${lu} » ne correspond a aucune tournee disponible.\n\n`
+      + 'Scannez le QR affiche par le postier, ou le code-barres de votre '
+      + 'feuille de route du jour.',
+      [
+        { text: 'Re-scanner', onPress: () => { scannedRef.current = false } },
+        { text: 'Fermer', onPress: () => { setShowScanner(false); scannedRef.current = false; setTorchOn(false) } },
+      ],
+    )
+  }, [assigning, doAssign, availableTours, tours])
 
   /* Affecter depuis la liste (sans confirmation) / Assign from available list (no confirmation) */
   const handleTapAssign = useCallback((tour: AvailableTour) => {

@@ -17,6 +17,15 @@ export interface Column<T> {
   filterKey?: keyof T
   /** Fonction retournant le texte filtrable (pour colonnes avec render) / Returns filterable text for rendered columns */
   filterValue?: (row: T) => string
+  /** Filtrer par liste déroulante des valeurs présentes plutôt qu'en tapant (#17).
+      Réservé aux colonnes à vocabulaire fermé — nature, base, statut, température :
+      on y cherche une valeur connue, pas un texte. / Pick from the values present
+      instead of typing; for closed-vocabulary columns only. */
+  filterSelect?: boolean
+  /** Identité du filtre quand deux colonnes partagent la même clé (véhicule et
+      transporteur lisent tous deux contract_id). / Filter identity when two
+      columns share a key. */
+  filterId?: string
 }
 
 interface DataTableProps<T extends { id: number }> {
@@ -145,6 +154,36 @@ export function DataTable<T extends { id: number }>({
   /* Colonnes filtrables / Filterable columns */
   const hasColumnFilters = columns.some((c) => c.filterable)
 
+  /* Texte filtrable d'une cellule — lu à l'identique pour construire la liste
+     déroulante et pour comparer. / A cell's filterable text, read the same way
+     when building the dropdown and when matching. */
+  const filterTextOf = useCallback((col: Column<T>, row: T): string => {
+    if (col.filterValue) return col.filterValue(row)
+    if (col.filterKey) {
+      const v = row[col.filterKey]
+      if (v != null) return String(v)
+    }
+    const v = (row as Record<string, unknown>)[String(col.key)]
+    return v != null ? String(v) : ''
+  }, [])
+
+  /* Valeurs proposées par colonne : celles réellement présentes, pas une liste
+     figée — un filtre ne doit pas offrir un choix qui ne ramène rien. /
+     Options are the values actually present, never a frozen list. */
+  const filterOptions = useMemo(() => {
+    const out: Record<string, string[]> = {}
+    for (const col of columns) {
+      if (!col.filterable || !col.filterSelect) continue
+      const seen = new Set<string>()
+      for (const row of data) {
+        const v = filterTextOf(col, row)
+        if (v) seen.add(v)
+      }
+      out[col.filterId ?? String(col.key)] = [...seen].sort((a, b) => a.localeCompare(b, 'fr'))
+    }
+    return out
+  }, [columns, data, filterTextOf])
+
   /* Filtrage / Filtering */
   const filtered = useMemo(() => {
     let result = data
@@ -154,7 +193,10 @@ export function DataTable<T extends { id: number }>({
     if (activeColFilters.length > 0) {
       result = result.filter((row) =>
         activeColFilters.every(([colKey, filterVal]) => {
-          const col = columns.find((c) => String(c.key) === colKey)
+          const col = columns.find((c) => (c.filterId ?? String(c.key)) === colKey)
+          // Colonne à liste (#17) : on a choisi une valeur, on la veut telle quelle.
+          // Un « contient » ramènerait SEC en cherchant BI_TEMP_SEC. / Exact match.
+          if (col?.filterSelect) return filterTextOf(col, row) === filterVal
           const q = filterVal.toLowerCase()
           // filterValue callback (texte rendu) / filterValue callback (rendered text)
           if (col?.filterValue) {
@@ -184,7 +226,7 @@ export function DataTable<T extends { id: number }>({
     }
 
     return result
-  }, [data, search, searchKeys, colFilters, columns])
+  }, [data, search, searchKeys, colFilters, columns, filterTextOf])
 
   /* Tri / Sorting */
   const sorted = useMemo(() => {
@@ -455,30 +497,52 @@ export function DataTable<T extends { id: number }>({
               {hasColumnFilters && (
                 <tr style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                   {onBulkDelete && <th className="px-2 pb-2 pt-0" />}
-                  {visibleColumns.map((col) => (
-                    <th key={`filter-${String(col.key)}`} className="px-2 pb-2 pt-0">
-                      {col.filterable ? (
-                        <input
-                          type="text"
-                          value={colFilters[String(col.key)] ?? ''}
-                          onChange={(e) => {
-                            setColFilters((prev) => ({ ...prev, [String(col.key)]: e.target.value }))
-                            setPage(0)
-                          }}
-                          placeholder="🔍"
-                          className="w-full px-2 py-1 rounded text-xs border outline-none focus:ring-1"
-                          style={{
-                            backgroundColor: 'var(--bg-primary)',
-                            borderColor: colFilters[String(col.key)] ? 'var(--color-primary)' : 'var(--border-color)',
-                            color: 'var(--text-primary)',
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <span />
-                      )}
-                    </th>
-                  ))}
+                  {visibleColumns.map((col) => {
+                    const filterId = col.filterId ?? String(col.key)
+                    const active = colFilters[filterId] ?? ''
+                    const setFilter = (v: string) => {
+                      setColFilters((prev) => ({ ...prev, [filterId]: v }))
+                      setPage(0)
+                    }
+                    return (
+                      <th key={`filter-${filterId}`} className="px-2 pb-2 pt-0">
+                        {col.filterable && col.filterSelect ? (
+                          <select
+                            value={active}
+                            onChange={(e) => setFilter(e.target.value)}
+                            className="w-full px-2 py-1 rounded text-xs border outline-none focus:ring-1"
+                            style={{
+                              backgroundColor: 'var(--bg-primary)',
+                              borderColor: active ? 'var(--color-primary)' : 'var(--border-color)',
+                              color: 'var(--text-primary)',
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <option value="">Tous</option>
+                            {(filterOptions[filterId] ?? []).map((opt) => (
+                              <option key={opt} value={opt}>{opt}</option>
+                            ))}
+                          </select>
+                        ) : col.filterable ? (
+                          <input
+                            type="text"
+                            value={active}
+                            onChange={(e) => setFilter(e.target.value)}
+                            placeholder="🔍"
+                            className="w-full px-2 py-1 rounded text-xs border outline-none focus:ring-1"
+                            style={{
+                              backgroundColor: 'var(--bg-primary)',
+                              borderColor: active ? 'var(--color-primary)' : 'var(--border-color)',
+                              color: 'var(--text-primary)',
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <span />
+                        )}
+                      </th>
+                    )
+                  })}
                   {(onEdit || onDelete || onDuplicate) && (
                     <th
                       className="px-2 pb-2 pt-0"

@@ -100,7 +100,7 @@ export default function TourHistory() {
     {
       key: 'tour_type' as keyof Tour,
       label: 'Nature',
-      width: '110px', filterable: true,
+      width: '110px', filterable: true, filterSelect: true,
       render: (row) => (row.tour_type && row.tour_type !== 'LIVRAISON' ? TOUR_TYPE_LABELS[row.tour_type] : 'Livraison'),
       filterValue: (row) => (row.tour_type && row.tour_type !== 'LIVRAISON' ? TOUR_TYPE_LABELS[row.tour_type] : 'Livraison'),
     },
@@ -121,7 +121,7 @@ export default function TourHistory() {
     {
       key: 'base_id',
       label: t('tourHistory.base'),
-      width: '140px', filterable: true,
+      width: '140px', filterable: true, filterSelect: true,
       render: (row) => baseMap.get(row.base_id)?.name ?? `#${row.base_id}`,
       filterValue: (row) => baseMap.get(row.base_id)?.name ?? '',
     },
@@ -143,8 +143,19 @@ export default function TourHistory() {
     {
       key: 'contract_id' as keyof Tour,
       label: t('tourHistory.transporter'),
-      width: '140px',
+      width: '140px', filterable: true, filterSelect: true, filterId: 'transporter',
       render: (row) => (row.contract_id != null ? contractMap.get(row.contract_id)?.transporter_name : undefined) ?? '—',
+      filterValue: (row) => (row.contract_id != null ? contractMap.get(row.contract_id)?.transporter_name : undefined) ?? '',
+    },
+    {
+      /* Température (#17) : c'est le premier tri de l'exploitation quand elle
+         relit l'historique — une tournée gel et une tournée sec ne se comparent
+         pas. / Temperature: the first cut when reading the history back. */
+      key: 'temperature_type' as keyof Tour,
+      label: 'Température',
+      width: '110px', filterable: true, filterSelect: true,
+      render: (row) => row.temperature_type ?? '—',
+      filterValue: (row) => row.temperature_type ?? '',
     },
     {
       key: 'id' as keyof Tour,
@@ -168,7 +179,7 @@ export default function TourHistory() {
     {
       key: 'status',
       label: t('common.status'),
-      width: '100px', filterable: true,
+      width: '100px', filterable: true, filterSelect: true,
       filterValue: (row) => t(`tourHistory.status.${row.status}`),
       render: (row) => (
         <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ color: statusColors[row.status] }}>
@@ -197,8 +208,9 @@ export default function TourHistory() {
     {
       key: 'driver_name',
       label: 'Chauffeur',
-      width: '110px', filterable: true,
+      width: '110px', filterable: true, filterSelect: true,
       render: (row) => row.driver_name ?? '—',
+      filterValue: (row) => row.driver_name ?? '',
     },
     {
       key: 'driver_arrival_time',

@@ -84,6 +84,13 @@ class PDV(Base, TenantMixin):
     # NULL = tous acceptés / NULL = all accepted
     allowed_vehicle_types: Mapped[str | None] = mapped_column(String(200))
 
+    # Groupe de livraison (#69) : « A » ou « B ». Les mises en avant sont
+    # injectées en une seule fois pour tout le réseau, puis livrées en deux
+    # vagues ; le groupe permet de filtrer les volumes d'une vague sans
+    # refaire d'injection. / Delivery wave (A/B): lets a single volume import be
+    # planned in two waves.
+    delivery_group: Mapped[str | None] = mapped_column(String(1))
+
     # Plan du site / Site access plan (URL or file path)
     site_plan_url: Mapped[str | None] = mapped_column(String(500))
 

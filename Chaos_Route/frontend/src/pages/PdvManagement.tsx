@@ -155,6 +155,12 @@ export default function PdvManagement() {
     { key: 'delivery_window_end', label: 'Livraison global à', type: 'time' },
     { key: 'access_constraints', label: 'Contraintes accès', type: 'textarea' },
     { key: 'allowed_vehicle_types', label: 'Véhicules autorisés', type: 'multicheck', options: vehicleTypeOptions },
+    /* Groupe de livraison (#69) : permet de n'injecter les volumes qu'une fois
+       et de les livrer en deux vagues. */
+    {
+      key: 'delivery_group', label: 'Groupe de livraison', type: 'select',
+      options: [{ value: '', label: '— Aucun —' }, { value: 'A', label: 'A' }, { value: 'B', label: 'B' }],
+    },
   ]
 
   const [uploading, setUploading] = useState(false)

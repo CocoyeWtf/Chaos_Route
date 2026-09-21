@@ -80,6 +80,9 @@ export interface PDV {
   site_plan_url?: string
   access_constraints?: string
   allowed_vehicle_types?: string
+  /* Groupe de livraison A/B (#69) : sert à livrer une injection unique en
+     deux vagues. / Delivery wave A/B. */
+  delivery_group?: string | null
   region_id: number
 }
 

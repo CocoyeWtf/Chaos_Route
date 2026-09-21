@@ -60,6 +60,11 @@ export function VolumePanel({
 }: VolumePanelProps) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
+  /* Groupe de livraison (#69) : une injection unique de volumes, livrée en deux
+     vagues. Le filtre est local au panneau — il ne change pas ce qui est
+     planifié, seulement ce qu'on regarde. /
+     Delivery wave filter: local to the panel, it only changes what is shown. */
+  const [groupFilter, setGroupFilter] = useState<'' | 'A' | 'B'>('')
 
   const pdvMap = useMemo(() => new Map(pdvs.map((p) => [p.id, p])), [pdvs])
   const pickupMap = useMemo(() => {
@@ -116,6 +121,11 @@ export function VolumePanel({
       filtered = filtered.filter((v) => baseFilters.has(v.base_origin_id))
     }
 
+    /* Filtrer par groupe de livraison (#69) / Filter by delivery wave */
+    if (groupFilter) {
+      filtered = filtered.filter((v) => pdvMap.get(v.pdv_id)?.delivery_group === groupFilter)
+    }
+
     const consumed = filtered.filter((v) => consumedVolumeIds.has(v.id))
     const available = filtered.filter((v) => !consumedVolumeIds.has(v.id))
 
@@ -131,7 +141,7 @@ export function VolumePanel({
     withDist.sort((a, b) => a.km - b.km)
 
     return [...withDist.map((w) => w.vol), ...consumed]
-  }, [volumes, consumedVolumeIds, lastStopPdvId, baseId, distanceIndex, search, pdvMap, tempFilters, baseFilters])
+  }, [volumes, consumedVolumeIds, lastStopPdvId, baseId, distanceIndex, search, pdvMap, tempFilters, baseFilters, groupFilter])
 
   /* Distance affichée par volume / Displayed distance per volume */
   const getDisplayDistance = (pdvId: number): number | null => {
@@ -183,6 +193,27 @@ export function VolumePanel({
             )
           })}
         </div>
+        {/* Groupe de livraison A/B (#69) — n'apparaît que si des points de vente
+            en portent un. Les mises en avant s'injectent en une fois et se
+            livrent en deux vagues. / Delivery wave chips, only when used. */}
+        {volumes.some((v) => pdvMap.get(v.pdv_id)?.delivery_group) && (
+          <div className="flex gap-1.5 mt-2">
+            {([['', 'Tous'], ['A', 'Groupe A'], ['B', 'Groupe B']] as const).map(([val, label]) => (
+              <button
+                key={val || 'tous'}
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border"
+                style={{
+                  backgroundColor: groupFilter === val ? 'var(--color-primary)' : 'transparent',
+                  borderColor: 'var(--color-primary)',
+                  color: groupFilter === val ? '#fff' : 'var(--color-primary)',
+                }}
+                onClick={() => setGroupFilter(val)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         {/* Chips filtre base d'origine (ticket #20) — n'apparaît que si plusieurs
             bases sont présentes dans les volumes du jour / Origin base filter chips */}
         {availableBases.length > 1 && (
@@ -272,6 +303,17 @@ export function VolumePanel({
                 </span>
                 {/* Reste à quai (#68) : distingué des volumes ordinaires, pour
                     que l'AT sache qu'il replanifie de la marchandise non partie. */}
+                {/* Gel livrable de jour seulement (#76) : le créneau est affiché,
+                    pour que l'AT regroupe ces points de vente entre eux. */}
+                {vol.temperature_class === 'GEL' && pdv?.is_day_gel && (
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                    style={{ backgroundColor: 'rgba(139,92,246,0.18)', color: '#8b5cf6' }}
+                    title={`Gel de jour uniquement${pdv.delivery_window_gel_start ? ` — ${pdv.delivery_window_gel_start} à ${pdv.delivery_window_gel_end ?? ''}` : ''} (pas de sas gel)`}
+                  >
+                    GEL JOUR{pdv.delivery_window_gel_end ? ` ≤ ${pdv.delivery_window_gel_end}` : ''}
+                  </span>
+                )}
                 {vol.is_raq && (
                   <span
                     className="px-1.5 py-0.5 rounded text-[10px] font-bold"

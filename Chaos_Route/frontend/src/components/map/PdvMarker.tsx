@@ -33,8 +33,9 @@ function zoomScale(zoom: number): number {
 /* Cache global d'icônes pastille / Global dot icon cache */
 const iconCache = new Map<string, L.DivIcon>()
 
-function makeIcon(color: string, size: number, borderWidth: number, hasPickup: boolean = false): L.DivIcon {
-  const key = `${color}-${size}-${borderWidth}-${hasPickup}`
+function makeIcon(color: string, size: number, borderWidth: number, hasPickup: boolean = false,
+                  dayGelOnly: boolean = false): L.DivIcon {
+  const key = `${color}-${size}-${borderWidth}-${hasPickup}-${dayGelOnly}`
   const cached = iconCache.get(key)
   if (cached) return cached
 
@@ -43,10 +44,16 @@ function makeIcon(color: string, size: number, borderWidth: number, hasPickup: b
   const badge = hasPickup
     ? `<div style="position:absolute;top:-3px;right:-3px;background:#f59e0b;width:${badgeSize}px;height:${badgeSize}px;border-radius:50%;border:1.5px solid #fff"></div>`
     : ''
+  /* Gel livrable de jour seulement (#76) : ces points de vente n'ont pas de sas
+     gel et n'acceptent le surgelé que sur un créneau court. Ils se regroupent
+     donc entre eux au moment de construire les tournées — d'où un liseré violet
+     bien visible. / Day-only frozen delivery: a violet ring makes them easy to
+     group while building tours. */
+  const anneauGel = dayGelOnly ? 'box-shadow:0 0 0 2px #8b5cf6,0 1px 4px rgba(0,0,0,.4);' : 'box-shadow:0 1px 4px rgba(0,0,0,.4);'
 
   const icon = L.divIcon({
     className: '',
-    html: `<div style="position:relative;display:inline-block"><div style="background:${color};width:${size}px;height:${size}px;border-radius:50%;border:${bw}px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>${badge}</div>`,
+    html: `<div style="position:relative;display:inline-block"><div style="background:${color};width:${size}px;height:${size}px;border-radius:50%;border:${bw}px solid #fff;${anneauGel}"></div>${badge}</div>`,
     iconSize: [size + (hasPickup ? 4 : 0), size + (hasPickup ? 4 : 0)],
     iconAnchor: [(size + (hasPickup ? 4 : 0)) / 2, (size + (hasPickup ? 4 : 0)) / 2],
   })
@@ -150,6 +157,9 @@ interface PdvMarkerProps {
 }
 
 export function PdvMarker({ pdv, onClick, onTempClick, onContextMenu, selected, volumeStatus = 'none', pickupSummary, showLabel, eqpByTemp, zoomLevel = 10 }: PdvMarkerProps) {
+  /* Gel de jour uniquement (#76) : signalé seulement s'il reste du gel à placer
+     pour ce point de vente, sinon le repère n'aide personne. */
+  const gelDeJour = !!pdv.is_day_gel && !!eqpByTemp?.GEL
   const eqpCount = eqpByTemp ? Object.values(eqpByTemp).reduce((a, b) => a + b, 0) : undefined
   if (!pdv.latitude || !pdv.longitude) return null
 
@@ -182,12 +192,12 @@ export function PdvMarker({ pdv, onClick, onTempClick, onContextMenu, selected, 
       return makeLabelIcon(labelColor, pdv.code, eqpCount, hasPickup, s)
     }
     /* Mode pastille classique — taille scalée / Classic dot mode — scaled size */
-    if (selected) return makeIcon('#f97316', Math.round(24 * s), Math.round(3 * s), hasPickup)
-    if (volumeStatus === 'raq') return makeIcon('#eab308', Math.round(18 * s), Math.round(2 * s), hasPickup)
-    if (volumeStatus === 'unassigned') return makeIcon('#ef4444', Math.round(18 * s), Math.round(2 * s), hasPickup)
-    if (volumeStatus === 'assigned') return makeIcon('#22c55e', Math.round(18 * s), Math.round(2 * s), hasPickup)
-    return makeIcon('#9ca3af', Math.round(14 * s), Math.round(2 * s), hasPickup)
-  }, [selected, volumeStatus, hasPickup, showLabel, eqpCount, pdv.code, zoomLevel, labelColor, tempBreakdownKey])
+    if (selected) return makeIcon('#f97316', Math.round(24 * s), Math.round(3 * s), hasPickup, gelDeJour)
+    if (volumeStatus === 'raq') return makeIcon('#eab308', Math.round(18 * s), Math.round(2 * s), hasPickup, gelDeJour)
+    if (volumeStatus === 'unassigned') return makeIcon('#ef4444', Math.round(18 * s), Math.round(2 * s), hasPickup, gelDeJour)
+    if (volumeStatus === 'assigned') return makeIcon('#22c55e', Math.round(18 * s), Math.round(2 * s), hasPickup, gelDeJour)
+    return makeIcon('#9ca3af', Math.round(14 * s), Math.round(2 * s), hasPickup, gelDeJour)
+  }, [selected, volumeStatus, hasPickup, showLabel, eqpCount, pdv.code, zoomLevel, labelColor, tempBreakdownKey, gelDeJour])
 
   return (
     <Marker

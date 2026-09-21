@@ -45,6 +45,7 @@ class PDVBase(BaseModel):
     delivery_window_gel_end: str | None = None
     access_constraints: str | None = None
     allowed_vehicle_types: str | None = None
+    delivery_group: str | None = None
     site_plan_url: str | None = None
     region_id: int
 
@@ -93,6 +94,7 @@ class PDVUpdate(BaseModel):
     delivery_window_gel_end: str | None = None
     access_constraints: str | None = None
     allowed_vehicle_types: str | None = None
+    delivery_group: str | None = None
     site_plan_url: str | None = None
     region_id: int | None = None
 

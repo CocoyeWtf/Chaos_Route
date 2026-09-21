@@ -205,6 +205,13 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
      (priorité manuelle 1→n). / List sort mode. */
   const [sortMode, setSortMode] = useState<SortMode>('asc')
 
+  /* Sélection multiple pour un changement de date groupé (#66). Décaler une
+     journée entière se faisait tournée par tournée. / Multi-selection for a bulk
+     delivery-date change: it had to be done tour by tour. */
+  const [selectedTourIds, setSelectedTourIds] = useState<Set<number>>(new Set())
+  const [bulkDate, setBulkDate] = useState('')
+  const [bulkSaving, setBulkSaving] = useState(false)
+
   /* Plages de filtrage (#81) : km, durée (minutes) et heure de départ. Vide =
      pas de borne. / Range filters: km, duration (minutes), departure time. */
   const [kmRange, setKmRange] = useState<{ min: string; max: string }>({ min: '', max: '' })
@@ -597,6 +604,36 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
       .sort((a, b) => a.id - b.id)
     return [...scheduled, ...unscheduled]
   }, [filteredTours, sortMode, tourVehicleMap, tourDuration])
+
+  /* Appliquer la nouvelle date de livraison aux tournées cochées (#66).
+     Les appels partent en séquence : le serveur recalcule la répartition du
+     terme fixe entre les tournées d'un contrat à chaque écriture, et une rafale
+     concurrente lui ferait recompter sur un état mouvant. /
+     Sequential calls: the server redistributes the fixed term per contract on
+     each write, so a concurrent burst would compute on a moving state. */
+  const applyBulkDate = useCallback(async () => {
+    if (!bulkDate || selectedTourIds.size === 0) return
+    setBulkSaving(true)
+    const echecs: string[] = []
+    try {
+      for (const id of selectedTourIds) {
+        try {
+          await api.put(`/tours/${id}`, { delivery_date: bulkDate })
+        } catch {
+          const t = tours.find((x) => x.id === id)
+          echecs.push(t?.code ?? `#${id}`)
+        }
+      }
+      await loadData()
+      setSelectedTourIds(new Set())
+      setBulkDate('')
+      if (echecs.length > 0) {
+        alert(`Date modifiée, sauf pour : ${echecs.join(', ')}`)
+      }
+    } finally {
+      setBulkSaving(false)
+    }
+  }, [bulkDate, selectedTourIds, tours, loadData])
 
   /* Détecter les tours avec violation de fenêtre de livraison / Detect delivery window violations */
   const deliveryWindowViolations = useMemo(() => {
@@ -1412,6 +1449,41 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
           </select>
         </div>
 
+        {/* Changement de date groupé (#66) : n'apparaît qu'une fois des tournées
+            cochées, pour ne pas encombrer la barre le reste du temps. */}
+        {selectedTourIds.size > 0 && (
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--color-primary)' }}>
+              {selectedTourIds.size} tournée{selectedTourIds.size > 1 ? 's' : ''} sélectionnée{selectedTourIds.size > 1 ? 's' : ''}
+            </label>
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={bulkDate}
+                onChange={(e) => setBulkDate(e.target.value)}
+                className="px-2 py-2 text-xs rounded-lg border"
+                style={{ borderColor: 'var(--color-primary)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                title="Nouvelle date de livraison"
+              />
+              <button
+                className="px-2 py-2 text-xs rounded-lg font-semibold text-white disabled:opacity-40"
+                style={{ backgroundColor: 'var(--color-primary)' }}
+                disabled={!bulkDate || bulkSaving}
+                onClick={applyBulkDate}
+              >
+                {bulkSaving ? '…' : 'Appliquer'}
+              </button>
+              <button
+                className="px-2 py-2 text-xs rounded-lg"
+                style={{ color: 'var(--text-muted)' }}
+                onClick={() => setSelectedTourIds(new Set())}
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Bouton Filtres avancés / Advanced filters button */}
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
@@ -1880,6 +1952,23 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                     {/* === Ligne 1 — Résumé compact / Line 1 — Compact summary === */}
                     <div className="px-3 py-1.5">
                       <div className="flex items-center gap-2">
+                        {/* Sélection pour le changement de date groupé (#66) */}
+                        <input
+                          type="checkbox"
+                          className="accent-orange-500 shrink-0"
+                          checked={selectedTourIds.has(tour.id)}
+                          title="Sélectionner pour un changement de date groupé"
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            e.stopPropagation()
+                            setSelectedTourIds((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(tour.id)) next.delete(tour.id)
+                              else next.add(tour.id)
+                              return next
+                            })
+                          }}
+                        />
                         {/* Flèche expand */}
                         <button
                           className="text-xs shrink-0 w-4 text-center"

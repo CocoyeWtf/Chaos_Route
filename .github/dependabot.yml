@@ -1,5 +1,11 @@
 # Veille automatique des dependances (STIME B8) : PR hebdomadaires pour les
 # mises a jour de securite backend / frontend / mobile / actions CI.
+#
+# Les mises a jour sont REGROUPEES par ecosysteme : une PR par lot plutot qu'une
+# PR par paquet. Dix-neuf PR ouvertes en parallele ne se relisent pas — elles
+# s'accumulent, et le bruit finit par masquer la mise a jour qui comptait.
+#
+# Updates are GROUPED per ecosystem: one PR per batch instead of one per package.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -7,20 +13,51 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      backend-python:
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /Chaos_Route/frontend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      frontend-npm:
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /Chaos_Route/mobile
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Pas de montee de version MAJEURE proposee automatiquement ici.
+    # Dans un projet Expo, la version du SDK fixe celles de react-native, de react
+    # et de tous les paquets expo-* : les monter un par un est precisement la
+    # maniere de casser le build. Une montee de SDK se fait deliberement, en bloc,
+    # avec `expo install --fix`, puis un build de validation sur une tablette.
+    # Les correctifs de securite en patch/mineur continuent d'arriver normalement ;
+    # une faille critique dans une dependance transitive se traite par un override
+    # dans package.json (cf. `tar` et `shell-quote`).
+    #
+    # No automatic MAJOR bumps here: in an Expo project the SDK pins react-native,
+    # react and every expo-* package. Majors are done deliberately, as a set.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    groups:
+      mobile-npm:
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

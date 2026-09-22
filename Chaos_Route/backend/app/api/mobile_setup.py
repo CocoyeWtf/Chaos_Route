@@ -55,7 +55,10 @@ APP_VERSION = "1.9.3"
 APP_BUILD_NUMBER = 14
 # Ticket #14 — ORDRE DES OPERATIONS pour publier le build 15 (app.json est deja
 # passe en 1.9.4 / versionCode 15) :
-#   1. eas build -p android --profile production
+#   1. eas build -p android --profile preview
+#      (profil « preview » = buildType apk dans eas.json ; « production »
+#       produit un app-bundle .aab, qui ne s'installe pas sur une tablette
+#       et ne peut donc pas etre depose ici. Cf. RUNBOOK_MISE_A_JOUR_MOBILE.)
 #   2. deposer l'APK sur le serveur a apk/cmro-driver.apk
 #   3. SEULEMENT ENSUITE : APP_VERSION = "1.9.4", APP_BUILD_NUMBER = 15
 # Inverser 2 et 3 forcerait toutes les tablettes vers un APK qui n'est pas celui

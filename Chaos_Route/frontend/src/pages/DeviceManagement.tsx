@@ -36,7 +36,7 @@ export default function DeviceManagement() {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editForm, setEditForm] = useState({ friendly_name: '', imei: '', base_id: '' as string, pdv_id: '' as string, profile: 'DRIVER', control_mode: '' as string })
   const [serverUrl, setServerUrl] = useState(() => getServerBaseUrl())
-  const [confirmAction, setConfirmAction] = useState<{ type: ConfirmActionType; deviceId: number; deviceName: string } | null>(null)
+  const [confirmAction, setConfirmAction] = useState<{ type: ConfirmActionType; deviceId: number; deviceName: string; registrationCode?: string } | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
 
   useEffect(() => {
@@ -190,7 +190,14 @@ export default function DeviceManagement() {
     },
     resetIdentity: {
       title: 'Reinitialiser l\'identite',
-      message: `Reinitialiser l'identite physique de "${confirmAction?.deviceName || ''}" ? Un nouveau telephone pourra s'enregistrer avec le meme code.`,
+      message:
+        `Reinitialiser l'identite physique de "${confirmAction?.deviceName || ''}" ?\n\n`
+        + `A FAIRE JUSTE APRES : re-enregistrer la tablette avec le code `
+        + `${confirmAction?.registrationCode || 'd\'enregistrement'} (QR ou saisie du code).\n\n`
+        + `Des la validation, la tablette actuellement en service affiche `
+        + `« Unknown device » et ne fonctionne plus tant qu'elle n'est pas re-enregistree. `
+        + `Elle ne se repare pas d'elle-meme : sur la tablette, Reglages > `
+        + `« Reinitialiser l'appareil », puis scanner le QR.`,
     },
   }
 
@@ -469,7 +476,7 @@ export default function DeviceManagement() {
                             {isRegistered(d) ? (
                               <>
                                 <button
-                                  onClick={() => setConfirmAction({ type: 'resetIdentity', deviceId: d.id, deviceName: d.friendly_name || `#${d.id}` })}
+                                  onClick={() => setConfirmAction({ type: 'resetIdentity', deviceId: d.id, deviceName: d.friendly_name || `#${d.id}`, registrationCode: d.registration_code })}
                                   className="text-xs font-semibold mr-2"
                                   style={{ color: '#f59e0b' }}
                                 >

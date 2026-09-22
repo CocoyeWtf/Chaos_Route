@@ -19,6 +19,7 @@ interface DeviceState {
   loadDevice: () => Promise<void>
   register: (deviceId: string, registrationCode: string) => Promise<void>
   fetchDeviceInfo: () => Promise<void>
+  fetchPdvBinding: () => Promise<void>
   reset: () => Promise<void>
 }
 
@@ -92,6 +93,13 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   },
 
   fetchDeviceInfo: async () => {
+    // Le rattachement PDV est resolu SEPAREMENT (#14) : il etait imbrique dans le
+    // try de /driver/device-info, donc un echec de cet appel — endpoint chauffeur,
+    // sur une tablette magasin — laissait pdv_id jamais renseigne, et la tablette
+    // repartait sur le flux chauffeur. /
+    // Resolve the PDV binding independently: it used to sit inside the driver
+    // endpoint's try block, so any failure there left pdv_id unset.
+    await get().fetchPdvBinding()
     try {
       const { data } = await api.get('/driver/device-info')
       const friendlyName = data.friendly_name || null
@@ -106,19 +114,6 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       await SecureStore.setItemAsync('allowed_features', JSON.stringify(allowedFeatures))
       await SecureStore.setItemAsync('control_mode', String(controlMode))
       set({ friendlyName, baseName, allowedFeatures, controlMode })
-      // Rattachement PDV (tablette magasin) via /devices/me.
-      // PERSISTANCE : on ne DÉLIE jamais la tablette sur un aléa. On ne met à jour
-      // le pdv_id QUE si le serveur renvoie une valeur ; un null/échec transitoire
-      // conserve le PDV déjà en cache (sinon écran noir au redémarrage + réinstall).
-      // Never unbind on a transient null/failure — keep the cached PDV.
-      try {
-        const { data: me } = await api.get('/devices/me')
-        const pdvId: number | null = me?.pdv_id ?? null
-        if (pdvId != null) {
-          await SecureStore.setItemAsync('pdv_id', String(pdvId))
-          set({ pdvId })
-        }
-      } catch { /* ignore — on garde le rattachement PDV en cache */ }
     } catch {
       // Charger depuis le cache local / Load from local cache
       try {
@@ -126,6 +121,22 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         if (cached) set({ allowedFeatures: JSON.parse(cached) })
       } catch { /* ignore */ }
     }
+  },
+
+  /* Rattachement PDV (tablette magasin) via /devices/me.
+     PERSISTANCE : on ne DÉLIE jamais la tablette sur un aléa. On ne met à jour le
+     pdv_id QUE si le serveur renvoie une valeur ; un null/échec transitoire
+     conserve le PDV déjà en cache (sinon écran noir au redémarrage + réinstall).
+     Never unbind on a transient null/failure — keep the cached PDV. */
+  fetchPdvBinding: async () => {
+    try {
+      const { data: me } = await api.get('/devices/me')
+      const pdvId: number | null = me?.pdv_id ?? null
+      if (pdvId != null) {
+        await SecureStore.setItemAsync('pdv_id', String(pdvId))
+        set({ pdvId })
+      }
+    } catch { /* ignore — on garde le rattachement PDV en cache */ }
   },
 
   reset: async () => {

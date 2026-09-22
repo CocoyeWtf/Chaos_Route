@@ -43,6 +43,7 @@ export default function RootLayout() {
   const segments = useSegments()
   const { isRegistered, isLoading, loadDevice, pdvId: devicePdvId } = useDeviceStore()
   const authUser = useAuthStore((s) => s.user)
+  const authLoading = useAuthStore((s) => s.isLoading)
   const loadSession = useAuthStore((s) => s.loadSession)
 
   // Auto-update state
@@ -112,7 +113,13 @@ export default function RootLayout() {
   }, [kioskExitAllowed])
 
   useEffect(() => {
-    if (isLoading) return
+    // Attendre AUSSI la restauration de session (#14) : la redirection se
+    // decidait sur le seul chargement de l'appareil, donc avant de savoir si
+    // un utilisateur PDV etait connecte. Au demarrage a froid la tablette
+    // magasin partait alors sur le flux chauffeur. /
+    // Wait for session restore too, else a cold start routes a store tablet
+    // into the driver flow before the PDV user is known.
+    if (isLoading || authLoading) return
     const inRegister = segments[0] === 'register'
     const inLogin = segments[0] === 'login'
     const inPdvFlow =
@@ -125,17 +132,17 @@ export default function RootLayout() {
     const isDevicePdv = isRegistered && !!devicePdvId
     const canPdvFlow = isPdvUser || isDevicePdv
 
-    // Utilisateur PDV deja authentifie -> menu PDV (eviter qu'il reste coince sur
-    // /register ou /login apres restauration de session) /
-    // Already-authenticated PDV user -> PDV menu
-    if (isPdvUser && (inRegister || inLogin)) {
-      router.replace('/pdv-home')
-      return
-    }
-
-    // Tablette magasin (device rattache PDV) -> flux PDV directement, sans login /
-    // Store tablet (PDV-bound device) -> PDV flow directly, no login
-    if (isDevicePdv && !inPdvFlow) {
+    // Une session PDV n'a rien a faire dans le flux chauffeur, quelle que soit
+    // son origine : tablette rattachee a un PDV, OU utilisateur PDV connecte (#14).
+    // Avant, seule la tablette rattachee etait ramenee au menu PDV ; un
+    // utilisateur PDV n'etait redirige que depuis /register ou /login. Pose sur
+    // les onglets chauffeur au demarrage, il y restait bloque — et ne retrouvait
+    // son interface qu'en se deconnectant puis reconnectant, jusqu'a la prochaine
+    // fermeture de l'application. /
+    // A PDV session belongs in the PDV flow whatever its origin: a PDV-bound
+    // tablet OR a signed-in PDV user. The latter used to be redirected only from
+    // /register and /login, so a cold start left it stuck on the driver tabs.
+    if (canPdvFlow && !inPdvFlow) {
       router.replace('/pdv-home')
       return
     }
@@ -144,10 +151,10 @@ export default function RootLayout() {
     // sans enregistrer un device chauffeur / Allow PDV users + store tablets in PDV screens
     if (!isRegistered && !inRegister && !inLogin && !(canPdvFlow && inPdvFlow)) {
       router.replace('/register')
-    } else if (isRegistered && inRegister && !isDevicePdv) {
+    } else if (isRegistered && inRegister && !canPdvFlow) {
       router.replace('/(tabs)')
     }
-  }, [isRegistered, isLoading, segments, router, authUser, devicePdvId])
+  }, [isRegistered, isLoading, authLoading, segments, router, authUser, devicePdvId])
 
   const handleUpdate = useCallback(async () => {
     if (!downloadUrl) return

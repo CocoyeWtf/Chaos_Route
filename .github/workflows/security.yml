@@ -21,8 +21,8 @@ jobs:
       run:
         working-directory: Chaos_Route/backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Install deps
@@ -37,8 +37,8 @@ jobs:
       run:
         working-directory: Chaos_Route/backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Bandit (severite haute bloquante)
@@ -59,8 +59,8 @@ jobs:
     name: Audit dependances (pip-audit + npm audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: pip-audit (backend)
@@ -69,7 +69,7 @@ jobs:
           pip install pip-audit
           # Bloque sur toute vulnerabilite connue avec correctif disponible
           pip-audit -r requirements.txt
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
       - name: npm audit (frontend, critiques bloquantes)

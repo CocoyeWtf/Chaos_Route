@@ -51,30 +51,35 @@ def _apk_sha256(apk_path: Path) -> str | None:
 # Mettre a jour a chaque build APK / Update on each APK build
 # IMPORTANT : build_number doit etre STRICTEMENT SUPERIEUR a celui dans l'APK sur le serveur
 # pour declencher la mise a jour. Egal ou inferieur = pas de mise a jour.
-APP_VERSION = "1.9.3"
-APP_BUILD_NUMBER = 14
-# Ticket #14 — ORDRE DES OPERATIONS pour publier le build 15 (app.json est deja
-# passe en 1.9.4 / versionCode 15) :
+APP_VERSION = "1.9.4"
+APP_BUILD_NUMBER = 15
+# ORDRE DES OPERATIONS a chaque publication d'un build :
 #   1. eas build -p android --profile preview
 #      (profil « preview » = buildType apk dans eas.json ; « production »
 #       produit un app-bundle .aab, qui ne s'installe pas sur une tablette
 #       et ne peut donc pas etre depose ici. Cf. RUNBOOK_MISE_A_JOUR_MOBILE.)
 #   2. deposer l'APK sur le serveur a apk/cmro-driver.apk
-#   3. SEULEMENT ENSUITE : APP_VERSION = "1.9.4", APP_BUILD_NUMBER = 15
+#   3. SEULEMENT ENSUITE : remonter APP_VERSION et APP_BUILD_NUMBER ici
 # Inverser 2 et 3 forcerait toutes les tablettes vers un APK qui n'est pas celui
-# annonce. A partir du build 15, le nom de version est incremente a chaque build
-# (11 a 14 partageaient « 1.9.3 », ce qui rendait toute mise a jour invisible) et
-# l'app remonte son build natif dans l'en-tete X-App-Build. /
-# Release order for build 15: build, upload the APK, THEN bump these constants.
+# annonce.
+# Build 15 publie le 2026-09-22 (EAS e5035e58, commit c6b26da, keystore
+# « Build Credentials MxqVu8k0LC » reutilise -> mise a jour sur place).
+#
+# A partir du build 15, le nom de version est incremente a chaque build (11 a 14
+# partageaient « 1.9.3 », ce qui rendait toute mise a jour invisible) et l'app
+# remonte son build natif dans l'en-tete X-App-Build. /
+# Release order: build, upload the APK, THEN bump these constants.
 
 # Coupe-circuit auto-update / Auto-update kill switch.
-# Reactive (ticket #14) : le build 14 (1.9.3) corrige l'ecran blanc du build 11
-# (correctif ecran blanc en build 12) + persistance session PDV et ecran noir au
-# redemarrage (builds 13/14). La mise a jour forcee est donc reactivee.
-# INVARIANT ANTI-BRICKING : ce numero DOIT correspondre a l'APK reellement servi
-# a apk/cmro-driver.apk sur le serveur. Ne passer a True qu'APRES avoir depose
-# l'APK vc14 sur le serveur, sinon les tablettes sont forcees vers un APK errone.
-# Emergency kill switch: re-enabled once the fixed vc14 APK is served.
+# Laisse actif pour le build 15 (1.9.4) : arbitrage du 22/09/2026, on est en
+# phase de test, la bascule immediate de tout le parc est sans consequence. Pour
+# un deploiement global, la consigne est l'inverse — deployer d'abord a False,
+# valider sur UNE tablette, puis repasser a True.
+# INVARIANT ANTI-BRICKING : APP_BUILD_NUMBER ci-dessus DOIT correspondre a l'APK
+# reellement servi a apk/cmro-driver.apk sur le serveur. Ne passer a True
+# qu'APRES avoir depose l'APK, sinon les tablettes sont forcees vers un APK qui
+# n'est pas celui annonce.
+# Emergency kill switch: keep False until the announced APK is actually served.
 FORCE_UPDATE = True
 
 

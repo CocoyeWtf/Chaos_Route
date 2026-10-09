@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 
 from app.config import settings
 from app.rate_limit import limiter
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -400,16 +400,85 @@ async def available_tours(
     return available
 
 
+# Build mobile a partir duquel la preuve de scan est exigee (#98). Les builds
+# anterieurs ne savent pas l'envoyer : leur refuser l'affectation bloquerait
+# des chauffeurs en tournee le temps que le parc se mette a jour. Le jour ou le
+# parc est passe en 16, cette tolerance ne sert plus personne — elle est posee
+# ici, pas disseminee. / Builds older than this cannot send the proof; refusing
+# them would strand drivers while the fleet updates.
+SCAN_REQUIRED_FROM_BUILD = 16
+
+
+def _scan_matches_tour(scan_code: str | None, tour: Tour) -> bool:
+    """Le code scanne designe-t-il bien CETTE tournee ? / Does the code match?
+
+    Deux formats, les deux deja en service (#51) : le QR du postier
+    « TOUR:<id> », et le code-barres de la feuille de route qui porte le code
+    de la tournee. La comparaison ignore la casse : un lecteur de code-barres
+    peut remonter en majuscules.
+    """
+    code = (scan_code or "").strip()
+    if not code:
+        return False
+    qr = re.fullmatch(r"TOUR:(\d+)", code, re.IGNORECASE)
+    if qr:
+        return int(qr.group(1)) == tour.id
+    return code.casefold() == (tour.code or "").casefold()
+
+
+async def _tour_from_scan(db: AsyncSession, scan_code: str) -> Tour | None:
+    """Resoudre la tournee designee par un code scanne / Resolve a scanned code.
+
+    `Tour.code` est unique : un code de feuille de route designe une seule
+    tournee, sans avoir besoin de la date ni de la base. / Tour.code is unique.
+    """
+    code = scan_code.strip()
+    qr = re.fullmatch(r"TOUR:(\d+)", code, re.IGNORECASE)
+    if qr:
+        return await db.get(Tour, int(qr.group(1)), options=[selectinload(Tour.stops)])
+    result = await db.execute(
+        select(Tour).where(func.lower(Tour.code) == code.lower())
+        .options(selectinload(Tour.stops)).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 @router.post("/assign-tour", response_model=DriverTourRead)
 async def assign_tour(
     data: SelfAssignCreate,
     db: AsyncSession = Depends(get_db),
     device: MobileDevice = Depends(get_authenticated_device),
 ):
-    """Affecter un tour a cet appareil / Assign a tour to this device."""
-    tour = await db.get(Tour, data.tour_id, options=[selectinload(Tour.stops)])
+    """Affecter un tour a cet appareil, sur preuve de scan (#98).
+
+    Le chauffeur ne choisit plus sa tournee dans une liste : il scanne le QR du
+    postier ou le code-barres de sa feuille de route. Un telephone reste avec
+    son chauffeur toute la journee, et un simple tap suffisait a s'attribuer
+    n'importe quelle tournee de la base — y compris celle d'un collegue, qui se
+    retrouvait alors sans rien. L'affectation sans scan reste possible depuis
+    l'onglet Postier du web (api/assignments.py), ou c'est un choix assume par
+    quelqu'un qui voit tout le plan de transport. /
+    A tap used to be enough to grab any tour of the base, including a
+    colleague's; assignment now requires scanning the QR or the route sheet.
+    """
+    scan_code = (data.scan_code or "").strip() or None
+
+    if data.tour_id is not None:
+        tour = await db.get(Tour, data.tour_id, options=[selectinload(Tour.stops)])
+    elif scan_code:
+        tour = await _tour_from_scan(db, scan_code)
+    else:
+        raise HTTPException(status_code=422, detail="Aucune tournee indiquee : scannez le QR ou la feuille de route")
     if not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
+
+    # Preuve de scan exigee des que l'app sait l'envoyer / Proof required as
+    # soon as the app can send it.
+    if (device.app_build or 0) >= SCAN_REQUIRED_FROM_BUILD and not _scan_matches_tour(scan_code, tour):
+        raise HTTPException(
+            status_code=403,
+            detail="Affectation uniquement par scan : scannez le QR du postier ou le code de votre feuille de route",
+        )
 
     if tour.status not in (TourStatus.DRAFT, TourStatus.VALIDATED):
         raise HTTPException(status_code=422, detail="Tour already in progress or completed")
@@ -427,7 +496,7 @@ async def assign_tour(
     # Verifier pas deja affecte / Check not already assigned
     existing = await db.execute(
         select(DeviceAssignment).where(
-            DeviceAssignment.tour_id == data.tour_id,
+            DeviceAssignment.tour_id == tour.id,
             DeviceAssignment.date == target_date,
         ).limit(1)
     )
@@ -439,7 +508,7 @@ async def assign_tour(
 
     assignment = DeviceAssignment(
         device_id=device.id,
-        tour_id=data.tour_id,
+        tour_id=tour.id,
         date=target_date,
         driver_name=driver,
         assigned_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -449,10 +518,14 @@ async def assign_tour(
 
     tour.device_assignment_id = assignment.id
 
-    # 5A. Audit log — self-assign tour
+    # 5A. Audit log — self-assign tour. Le mode d'affectation est trace : il
+    # dit si la tournee a ete prise au scan ou par un build anterieur au 16,
+    # seul moyen de verifier que le parc est bien passe au scan. / The audit
+    # records how the tour was taken — the only way to check fleet migration.
+    mode = "scan" if _scan_matches_tour(scan_code, tour) else "legacy"
     db.add(AuditLog(
         entity_type="tour", entity_id=tour.id, action="SELF_ASSIGN",
-        changes=f'{{"device_id":{device.id},"device_name":"{device.friendly_name or ""}","driver":"{driver or ""}","tour_code":"{tour.code}"}}',
+        changes=f'{{"device_id":{device.id},"device_name":"{device.friendly_name or ""}","driver":"{driver or ""}","tour_code":"{tour.code}","mode":"{mode}","app_build":{device.app_build or 0}}}',
         user=f"device:{device.id}",
         timestamp=_now_iso(),
     ))

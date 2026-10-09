@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, Alert } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuthStore } from '../stores/useAuthStore'
+import { useDeviceStore } from '../stores/useDeviceStore'
 import { COLORS, API_BASE_URL } from '../constants/config'
 import api from '../services/api'
 import type { TokenResponse } from '../types'
@@ -16,6 +17,14 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false)
   const [serverUrl, setServerUrl] = useState(API_BASE_URL)
   const [showServer, setShowServer] = useState(false)
+  /* Une tablette magasin n'a pas besoin de compte pour declarer ses retours :
+     elle s'authentifie par son appareil. Si elle atterrit ici (deconnexion,
+     session expiree), il lui faut un chemin de retour — l'ecran de connexion
+     appartient au flux PDV depuis le #98, la redirection ne la ramene donc
+     plus d'elle-meme. / A store tablet needs no account; give it a way back. */
+  const devicePdvId = useDeviceStore((s) => s.pdvId)
+  const deviceProfile = useDeviceStore((s) => s.profile)
+  const isStoreTablet = !!devicePdvId || deviceProfile === 'PDV'
 
   const handleLogin = async () => {
     if (!username || !password) return
@@ -80,6 +89,12 @@ export default function LoginScreen() {
             <Text style={styles.buttonText}>{loading ? 'Connexion...' : 'Se connecter'}</Text>
           </TouchableOpacity>
         </View>
+
+        {isStoreTablet && (
+          <TouchableOpacity onPress={() => router.replace('/pdv-home')} style={{ marginTop: 18 }}>
+            <Text style={styles.serverToggle}>Continuer sans compte (tablette magasin)</Text>
+          </TouchableOpacity>
+        )}
 
         {/* URL serveur configurable / Configurable server URL */}
         <TouchableOpacity onPress={() => setShowServer(!showServer)} style={{ marginTop: 20 }}>

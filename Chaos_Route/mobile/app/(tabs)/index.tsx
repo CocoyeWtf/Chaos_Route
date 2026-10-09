@@ -1,7 +1,15 @@
-/* Liste tours du jour + affectation / Daily tour list + assignment
-   Deux modes :
-   - Liste : tours assignes + tours disponibles (auto-affectation par tap)
-   - Scanner QR : optionnel, accessible via bouton
+/* Liste tours du jour + affectation par scan / Daily tour list, scan assignment
+
+   L'ecran ne montre QUE les tournees deja affectees a cet appareil. La liste
+   des tournees disponibles et son affectation au tap ont ete retirees (#98) :
+   un telephone reste avec son chauffeur toute la journee, et un tap suffisait
+   a s'attribuer n'importe quelle tournee de la base — y compris celle d'un
+   collegue, qui se retrouvait alors sans rien, sans que personne ne sache
+   pourquoi. Une tournee se prend desormais en scannant le QR du postier ou le
+   code-barres de sa feuille de route ; le postier peut aussi l'affecter depuis
+   le web. Le serveur exige la meme preuve, ce n'est pas qu'un ecran en moins. /
+   Only tours already assigned to this device are listed; taking a tour
+   requires scanning, and the server demands the same proof.
 */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
@@ -16,7 +24,7 @@ import { TourCard } from '../../components/TourCard'
 import { useDeviceStore } from '../../stores/useDeviceStore'
 import { COLORS } from '../../constants/config'
 import { TorchToggleButton } from '../../components/TorchToggleButton'
-import type { DriverTour, AvailableTour } from '../../types'
+import type { DriverTour } from '../../types'
 
 /* Une seule verification de la notice GPS par session d'app /
    Check the GPS notice only once per app session */
@@ -43,7 +51,6 @@ export default function TourListScreen() {
       .catch(() => { gpsNoticeChecked = false })  // reessaiera au prochain montage
   }, [deviceId, router])
   const [tours, setTours] = useState<DriverTour[]>([])
-  const [availableTours, setAvailableTours] = useState<AvailableTour[]>([])
   const [loading, setLoading] = useState(false)
   const [assigning, setAssigning] = useState(false)
   const [showScanner, setShowScanner] = useState(false)
@@ -70,21 +77,11 @@ export default function TourListScreen() {
     }
   }, [date])
 
-  const loadAvailable = useCallback(async () => {
-    try {
-      const { data } = await api.get<AvailableTour[]>('/driver/available-tours', { params: { date } })
-      setAvailableTours(data)
-    } catch {
-      // Silencieux — pas critique
-    }
-  }, [date])
-
   // Recharger a chaque focus / Reload on focus
   useFocusEffect(
     useCallback(() => {
       loadTours()
-      loadAvailable()
-    }, [loadTours, loadAvailable])
+    }, [loadTours])
   )
 
   // Polling 30s quand aucun tour actif — detecter affectation distante / Poll when no active tour
@@ -101,7 +98,6 @@ export default function TourListScreen() {
           Vibration.vibrate([0, 200, 100, 200])
           Alert.alert('Nouveau tour assigne', newTour ? `${newTour.code} — ${newTour.stops.length} arrets` : 'Un tour a ete assigne')
           setTours(data)
-          loadAvailable()
         }
         prevTourIdsRef.current = newIds || prevTourIdsRef.current
         if (!prevTourIdsRef.current) {
@@ -110,30 +106,39 @@ export default function TourListScreen() {
       } catch {}
     }, 30_000)
     return () => clearInterval(interval)
-  }, [tours, date, loadAvailable])
+  }, [tours, date])
 
-  /* Affecter un tour (depuis liste ou QR) / Assign tour (from list or QR) */
-  const doAssign = useCallback(async (tourId: number) => {
+  /* Affecter la tournee designee par le code scanne / Assign the scanned tour.
+
+     C'est le serveur qui resout le code et verifie la preuve de scan : l'app
+     n'a plus besoin de connaitre la liste des tournees disponibles pour en
+     prendre une, et le controle ne depend plus d'un ecran. / The server
+     resolves the code and checks the proof. */
+  const doAssign = useCallback(async (scanCode: string) => {
     if (assigning) return
     setAssigning(true)
     try {
-      const { data: assigned } = await api.post('/driver/assign-tour', { tour_id: tourId })
+      const { data: assigned } = await api.post('/driver/assign-tour', { scan_code: scanCode })
       await loadTours()
-      await loadAvailable()
       setShowScanner(false)
       scannedRef.current = false
       Alert.alert('Tour affecte', `${assigned.code} — ${assigned.stops?.length ?? 0} arrets`, [
         { text: 'OK' },
       ])
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Erreur affectation'
+      const status = (e as { response?: { status?: number } })?.response?.status
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      const msg = status === 404
+        ? `« ${scanCode} » ne correspond a aucune tournee.\n\nScannez le QR affiche par le postier, ou le code-barres de votre feuille de route du jour.`
+        : detail || 'Erreur affectation'
       Alert.alert('Erreur', msg, [
-        { text: 'OK', onPress: () => { scannedRef.current = false } },
+        { text: 'Re-scanner', onPress: () => { scannedRef.current = false } },
+        { text: 'Fermer', onPress: () => { setShowScanner(false); scannedRef.current = false; setTorchOn(false) } },
       ])
     } finally {
       setAssigning(false)
     }
-  }, [assigning, loadTours, loadAvailable])
+  }, [assigning, loadTours])
 
   /* Scanner une affectation / Scan an assignment.
      Deux formats acceptes (#51) :
@@ -146,40 +151,15 @@ export default function TourListScreen() {
   const handleQrScanned = useCallback(({ data: qrData }: { data: string }) => {
     if (scannedRef.current || assigning) return
     scannedRef.current = true
-
     const lu = qrData.trim()
-
-    const match = lu.match(/^TOUR:(\d+)$/)
-    if (match) {
-      doAssign(Number(match[1]))
+    if (!lu) {
+      scannedRef.current = false
       return
     }
-
-    // Code-barres de la feuille de route : on resout le code sur la liste des
-    // tournees disponibles, deja chargee — pas d'appel reseau supplementaire.
-    const parCode = availableTours.find((t) => t.code === lu)
-      || tours.find((t) => t.code === lu)
-    if (parCode) {
-      doAssign(parCode.id)
-      return
-    }
-
-    Alert.alert(
-      'Code non reconnu',
-      `« ${lu} » ne correspond a aucune tournee disponible.\n\n`
-      + 'Scannez le QR affiche par le postier, ou le code-barres de votre '
-      + 'feuille de route du jour.',
-      [
-        { text: 'Re-scanner', onPress: () => { scannedRef.current = false } },
-        { text: 'Fermer', onPress: () => { setShowScanner(false); scannedRef.current = false; setTorchOn(false) } },
-      ],
-    )
-  }, [assigning, doAssign, availableTours, tours])
-
-  /* Affecter depuis la liste (sans confirmation) / Assign from available list (no confirmation) */
-  const handleTapAssign = useCallback((tour: AvailableTour) => {
-    doAssign(tour.id)
-  }, [doAssign])
+    // Le code part tel quel : le serveur accepte « TOUR:<id> » comme le code
+    // de la feuille de route, et c'est lui qui tranche. / The code goes as-is.
+    doAssign(lu)
+  }, [assigning, doAssign])
 
   // Tours actifs (non termines) / Active (non-completed) tours
   const activeTours = tours.filter((t) => t.status !== 'COMPLETED')
@@ -263,7 +243,7 @@ export default function TourListScreen() {
         refreshControl={
           <RefreshControl
             refreshing={loading}
-            onRefresh={() => { loadTours(); loadAvailable() }}
+            onRefresh={loadTours}
             tintColor={COLORS.primary}
           />
         }
@@ -310,48 +290,13 @@ export default function TourListScreen() {
               </View>
             )}
 
-            {/* Section tours disponibles / Available tours section */}
-            {availableTours.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Tours disponibles</Text>
-                <Text style={styles.sectionHint}>Appuyez pour affecter a cet appareil</Text>
-                {availableTours.map((tour) => (
-                  <TouchableOpacity
-                    key={tour.id}
-                    style={styles.availableCard}
-                    onPress={() => handleTapAssign(tour)}
-                    activeOpacity={0.7}
-                    disabled={assigning}
-                  >
-                    <View style={styles.availableHeader}>
-                      <Text style={styles.availableCode}>{tour.code}</Text>
-                      {tour.departure_time && (
-                        <Text style={styles.availableTime}>Dep. {tour.departure_time}</Text>
-                      )}
-                    </View>
-                    <View style={styles.availableRow}>
-                      <Text style={styles.availableLabel}>
-                        {tour.stops_count} arrets · {tour.total_eqp || 0} EQC
-                      </Text>
-                      {tour.vehicle_code && (
-                        <Text style={styles.availableLabel}>{tour.vehicle_code}</Text>
-                      )}
-                    </View>
-                    {tour.driver_name && (
-                      <Text style={styles.availableDriver}>{tour.driver_name}</Text>
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
             {/* Message vide / Empty message */}
-            {!loading && activeTours.length === 0 && availableTours.length === 0 && completedTours.length === 0 && !error && (
+            {!loading && activeTours.length === 0 && completedTours.length === 0 && !error && (
               <View style={styles.empty}>
-                <Text style={styles.emptyText}>Aucun tour pour cette date</Text>
+                <Text style={styles.emptyText}>Aucune tournee affectee a cet appareil</Text>
                 <Text style={styles.emptyHint}>
-                  Tirez vers le bas pour rafraichir{'\n'}
-                  ou scannez un QR avec le bouton ci-dessous
+                  Scannez le QR du postier ou le code-barres de votre feuille{'\n'}
+                  de route avec le bouton ci-dessous, ou tirez pour rafraichir.
                 </Text>
               </View>
             )}
@@ -467,53 +412,6 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     marginBottom: 8,
   },
-  sectionHint: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    marginBottom: 8,
-  },
-
-  /* Tours disponibles / Available tours */
-  availableCard: {
-    backgroundColor: COLORS.bgSecondary,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.primary,
-  },
-  availableHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  availableCode: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: COLORS.textPrimary,
-  },
-  availableTime: {
-    fontSize: 13,
-    color: COLORS.primary,
-    fontWeight: '600',
-  },
-  availableRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  availableLabel: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-  },
-  availableDriver: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-
   /* Vide / Empty */
   empty: {
     alignItems: 'center',

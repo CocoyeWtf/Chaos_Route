@@ -287,9 +287,18 @@ class AvailableTourRead(BaseModel):
     vehicle_code: str | None = None
 
 class SelfAssignCreate(BaseModel):
-    """Affectation tour depuis le mobile / Tour assignment from mobile."""
-    tour_id: int
+    """Affectation tour depuis le mobile / Tour assignment from mobile.
+
+    `scan_code` porte la preuve du scan (#98) : le QR affiche par le postier
+    (« TOUR:<id> ») ou le code de la tournee imprime sur la feuille de route.
+    `tour_id` devient facultatif — le code suffit a identifier la tournee, et
+    c'est tout l'interet : l'app n'a plus a connaitre la liste des tournees
+    disponibles pour en prendre une. / scan_code carries the proof of scan;
+    tour_id is now optional since the code identifies the tour.
+    """
+    tour_id: int | None = None
     driver_name: str | None = None
+    scan_code: str | None = Field(default=None, max_length=50)
 
 
 # ─── DeliveryAlert ───

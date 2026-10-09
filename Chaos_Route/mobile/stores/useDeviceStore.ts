@@ -11,6 +11,11 @@ interface DeviceState {
   friendlyName: string | null    // Nom de l'appareil (depuis le serveur)
   baseName: string | null        // Nom de la base logistique
   pdvId: number | null           // PDV rattache (tablette magasin sans login) / Bound PDV
+  // Profil declare cote back-office : DRIVER, PDV, BASE_RECEPTION (#98). Il ne
+  // depend ni d'une session ni d'un rattachement, et c'est lui qui doit decider
+  // de l'interface : une tablette magasin reste une tablette magasin meme quand
+  // la session a expire. / Back-office profile — it decides the interface.
+  profile: string | null
   allowedFeatures: string[]      // Fonctionnalites autorisees / Allowed features
   controlMode: boolean           // Mode controle actif (photo obligatoire) / Control mode active
   isRegistered: boolean
@@ -31,6 +36,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   friendlyName: null,
   baseName: null,
   pdvId: null,
+  profile: null,
   allowedFeatures: ALL_FEATURES,
   controlMode: false,
   isRegistered: false,
@@ -56,9 +62,11 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         if (cachedCtrl) controlMode = cachedCtrl === 'true'
       } catch { /* ignore */ }
       let pdvId: number | null = null
+      let profile: string | null = null
       try {
         const cachedPdv = await SecureStore.getItemAsync('pdv_id')
         if (cachedPdv) pdvId = parseInt(cachedPdv, 10)
+        profile = await SecureStore.getItemAsync('device_profile')
       } catch { /* ignore */ }
       const isRegistered = !!deviceId && !!registrationCode
       set({
@@ -67,6 +75,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         friendlyName,
         baseName,
         pdvId,
+        profile,
         allowedFeatures,
         controlMode,
         isRegistered,
@@ -123,11 +132,12 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
-  /* Rattachement PDV (tablette magasin) via /devices/me.
+  /* Rattachement PDV + profil (tablette magasin) via /devices/me.
      PERSISTANCE : on ne DÉLIE jamais la tablette sur un aléa. On ne met à jour le
-     pdv_id QUE si le serveur renvoie une valeur ; un null/échec transitoire
-     conserve le PDV déjà en cache (sinon écran noir au redémarrage + réinstall).
-     Never unbind on a transient null/failure — keep the cached PDV. */
+     pdv_id ni le profil QUE si le serveur renvoie une valeur ; un null/échec
+     transitoire conserve ce qui est déjà en cache (sinon écran noir au
+     redémarrage + réinstall).
+     Never unbind on a transient null/failure — keep the cached PDV/profile. */
   fetchPdvBinding: async () => {
     try {
       const { data: me } = await api.get('/devices/me')
@@ -135,6 +145,11 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       if (pdvId != null) {
         await SecureStore.setItemAsync('pdv_id', String(pdvId))
         set({ pdvId })
+      }
+      const profile: string | null = me?.profile ?? null
+      if (profile) {
+        await SecureStore.setItemAsync('device_profile', profile)
+        set({ profile })
       }
     } catch { /* ignore — on garde le rattachement PDV en cache */ }
   },
@@ -147,7 +162,8 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     await SecureStore.deleteItemAsync('allowed_features')
     await SecureStore.deleteItemAsync('control_mode')
     await SecureStore.deleteItemAsync('pdv_id')
-    set({ deviceId: null, registrationCode: null, friendlyName: null, baseName: null, pdvId: null, allowedFeatures: ALL_FEATURES, controlMode: false, isRegistered: false })
+    await SecureStore.deleteItemAsync('device_profile')
+    set({ deviceId: null, registrationCode: null, friendlyName: null, baseName: null, pdvId: null, profile: null, allowedFeatures: ALL_FEATURES, controlMode: false, isRegistered: false })
   },
 }))
 

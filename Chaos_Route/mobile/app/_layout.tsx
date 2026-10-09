@@ -42,7 +42,7 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 export default function RootLayout() {
   const router = useRouter()
   const segments = useSegments()
-  const { isRegistered, isLoading, loadDevice, pdvId: devicePdvId } = useDeviceStore()
+  const { isRegistered, isLoading, loadDevice, pdvId: devicePdvId, profile: deviceProfile } = useDeviceStore()
   const authUser = useAuthStore((s) => s.user)
   const authLoading = useAuthStore((s) => s.isLoading)
   const loadSession = useAuthStore((s) => s.loadSession)
@@ -140,14 +140,28 @@ export default function RootLayout() {
     if (isLoading || authLoading) return
     const inRegister = segments[0] === 'register'
     const inLogin = segments[0] === 'login'
+    // `login` fait partie du flux PDV (#98) : sans ca, une tablette magasin
+    // renvoyee vers l'ecran de connexion en etait aussitot ressortie par la
+    // redirection ci-dessous — impossible d'y ouvrir une session. /
+    // `login` belongs to the PDV flow, otherwise the redirect below bounces a
+    // store tablet out of the sign-in screen.
     const inPdvFlow =
       segments[0] === 'pdv-home' ||
       segments[0] === 'pdv-pickup' ||
-      segments[0] === 'printer-settings'
+      segments[0] === 'printer-settings' ||
+      segments[0] === 'login'
     const isPdvUser = !!authUser?.pdv_id
-    // Tablette magasin : appareil enregistre + rattache a un PDV (sans login) /
-    // Store tablet: registered device bound to a PDV (no login)
-    const isDevicePdv = isRegistered && !!devicePdvId
+    // Tablette magasin : le PROFIL de l'appareil fait foi (#98), pas seulement
+    // son rattachement a un PDV. Le routage ne regardait que `pdv_id` — celui
+    // de la session ou celui du rattachement : a l'expiration du jeton, et sur
+    // une tablette de profil PDV pas encore rattachee, l'appareil repartait sur
+    // l'interface CHAUFFEUR. C'est le « au bout de quelques ouvertures /
+    // fermetures, l'appli repasse sur l'interface chauffeur » du ticket #98, et
+    // la raison du contournement « se deconnecter puis se reconnecter ». Un
+    // profil, lui, ne se perime pas. /
+    // The device PROFILE decides: routing used to depend on a pdv_id, so an
+    // expired token sent a store tablet back to the driver interface.
+    const isDevicePdv = isRegistered && (!!devicePdvId || deviceProfile === 'PDV')
     const canPdvFlow = isPdvUser || isDevicePdv
 
     // Une session PDV n'a rien a faire dans le flux chauffeur, quelle que soit
@@ -172,7 +186,7 @@ export default function RootLayout() {
     } else if (isRegistered && inRegister && !canPdvFlow) {
       router.replace('/(tabs)')
     }
-  }, [isRegistered, isLoading, authLoading, segments, router, authUser, devicePdvId])
+  }, [isRegistered, isLoading, authLoading, segments, router, authUser, devicePdvId, deviceProfile])
 
   const handleUpdate = useCallback(async () => {
     if (!downloadUrl) return

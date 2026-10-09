@@ -17,6 +17,12 @@ Deux sources complementaires :
   - ce detecteur cote serveur repere le silence → attrape aussi l'app tuee, le
     telephone eteint et le mode avion, que l'app ne peut evidemment pas
     signaler elle-meme.
+
+Ce module porte aussi la surveillance « telephone non rentre sur base » (#99) :
+un materiel qui ne revient pas est un cout reel, mais le suivre en continu hors
+tournee reviendrait a suivre une personne en dehors de son temps de travail, ce
+que le registre des traitements exclut. On regarde donc la FIN d'une tournee —
+ou le telephone a emis pour la derniere fois — et rien d'autre.
 """
 
 import asyncio
@@ -26,11 +32,16 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.models.base_logistics import BaseLogistics
 from app.models.delivery_alert import AlertSeverity, AlertType, DeliveryAlert
+from app.models.device_assignment import DeviceAssignment
 from app.models.gps_position import GPSPosition
+from app.models.mobile_device import MobileDevice
 from app.models.stop_event import StopEvent
-from app.models.tour import Tour, TourStatus
+from app.models.tour import Tour, TourStatus, return_base_of
 from app.models.tour_stop import TourStop
+from app.utils.geo import haversine
 
 logger = logging.getLogger(__name__)
 
@@ -60,37 +71,38 @@ def _parse_iso(value: str | None) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-async def _has_open_alert(session: AsyncSession, tour_id: int) -> bool:
-    """Alerte NO_GPS deja ouverte sur ce tour ? / Already an open NO_GPS alert?
+async def _has_open_alert(session: AsyncSession, tour_id: int, alert_type: AlertType) -> bool:
+    """Alerte de ce type deja ouverte sur ce tour ? / Already an open alert?
 
-    Une seule alerte par episode de silence : tant que l'exploitation ne l'a pas
-    acquittee, on n'en empile pas d'autres. Une fois acquittee, un nouveau
-    silence en leve une nouvelle. / One alert per silence episode.
+    Une seule alerte par episode : tant que l'exploitation ne l'a pas
+    acquittee, on n'en empile pas d'autres. Une fois acquittee, un nouvel
+    episode en leve une nouvelle. / One alert per episode.
     """
     result = await session.execute(
         select(DeliveryAlert.id).where(
             DeliveryAlert.tour_id == tour_id,
-            DeliveryAlert.alert_type == AlertType.NO_GPS,
+            DeliveryAlert.alert_type == alert_type,
             DeliveryAlert.acknowledged_at.is_(None),
         ).limit(1)
     )
     return result.scalar_one_or_none() is not None
 
 
-async def raise_no_gps_alert(
+async def _raise_alert(
     session: AsyncSession,
     tour: Tour,
+    alert_type: AlertType,
     message: str,
     *,
     device_id: int | None = None,
     severity: AlertSeverity = AlertSeverity.WARNING,
 ) -> DeliveryAlert | None:
-    """Lever une alerte NO_GPS si aucune n'est deja ouverte sur ce tour."""
-    if await _has_open_alert(session, tour.id):
+    """Lever une alerte si aucune du meme type n'est ouverte sur ce tour."""
+    if await _has_open_alert(session, tour.id, alert_type):
         return None
     alert = DeliveryAlert(
         tour_id=tour.id,
-        alert_type=AlertType.NO_GPS,
+        alert_type=alert_type,
         severity=severity,
         message=message,
         created_at=_now().isoformat(timespec="seconds"),
@@ -103,6 +115,21 @@ async def raise_no_gps_alert(
     session.add(alert)
     await session.flush()
     return alert
+
+
+async def raise_no_gps_alert(
+    session: AsyncSession,
+    tour: Tour,
+    message: str,
+    *,
+    device_id: int | None = None,
+    severity: AlertSeverity = AlertSeverity.WARNING,
+) -> DeliveryAlert | None:
+    """Lever une alerte NO_GPS si aucune n'est deja ouverte sur ce tour."""
+    return await _raise_alert(
+        session, tour, AlertType.NO_GPS, message,
+        device_id=device_id, severity=severity,
+    )
 
 
 async def detect_gps_silence(
@@ -176,6 +203,93 @@ async def detect_gps_silence(
     return raised
 
 
+async def detect_devices_away_from_base(
+    session: AsyncSession,
+    *,
+    radius_km: float,
+    quiet_minutes: int,
+    now: datetime | None = None,
+) -> list[DeliveryAlert]:
+    """Telephones dont la tournee s'est terminee loin de leur base (#99).
+
+    On ne juge qu'une tournee RETURNING ou COMPLETED dont le telephone s'est
+    TU depuis `quiet_minutes` : tant qu'il emet, il est peut-etre encore sur la
+    route du retour, et une alerte serait fausse. Sans position, pas de verdict
+    — le silence complet est deja couvert par l'alerte NO_GPS. /
+    Only judge a finished tour whose phone has gone quiet.
+    """
+    now = now or _now()
+    cutoff = now - timedelta(minutes=quiet_minutes)
+    since_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    tours = (await session.execute(
+        select(Tour).where(
+            Tour.status.in_((TourStatus.RETURNING, TourStatus.COMPLETED)),
+            Tour.date >= since_date,
+        )
+    )).scalars().all()
+    if not tours:
+        return []
+
+    tour_ids = [t.id for t in tours]
+    last_gps = dict((await session.execute(
+        select(GPSPosition.tour_id, func.max(GPSPosition.timestamp))
+        .where(GPSPosition.tour_id.in_(tour_ids))
+        .group_by(GPSPosition.tour_id)
+    )).all())
+
+    raised: list[DeliveryAlert] = []
+    for tour in tours:
+        horodatage = _parse_iso(last_gps.get(tour.id))
+        if horodatage is None or horodatage > cutoff:
+            continue
+
+        position = (await session.execute(
+            select(GPSPosition)
+            .where(GPSPosition.tour_id == tour.id)
+            .order_by(GPSPosition.timestamp.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if position is None or position.latitude is None or position.longitude is None:
+            continue
+
+        base = await session.get(BaseLogistics, return_base_of(tour))
+        if base is None or base.latitude is None or base.longitude is None:
+            # Base sans coordonnees : on ne peut rien affirmer, et une alerte
+            # non fondee userait l'attention de l'exploitation.
+            continue
+
+        distance = haversine(
+            position.latitude, position.longitude, base.latitude, base.longitude)
+        if distance <= radius_km:
+            continue
+
+        device = (await session.execute(
+            select(MobileDevice)
+            .join(DeviceAssignment, DeviceAssignment.device_id == MobileDevice.id)
+            .where(DeviceAssignment.tour_id == tour.id)
+            .limit(1)
+        )).scalar_one_or_none()
+
+        nom_appareil = (device.friendly_name if device else None) or "appareil inconnu"
+        driver = tour.driver_name or "chauffeur inconnu"
+        message = (
+            f"Telephone « {nom_appareil} » ({driver}, tournee {tour.code}) : "
+            f"derniere position connue a {distance:.1f} km de {base.name}, "
+            f"le {horodatage.strftime('%d/%m a %Hh%M')}. Verifier que le "
+            f"materiel est bien rentre."
+        )
+        alerte = await _raise_alert(
+            session, tour, AlertType.DEVICE_NOT_AT_BASE, message,
+            device_id=device.id if device else None,
+            severity=AlertSeverity.WARNING,
+        )
+        if alerte is not None:
+            raised.append(alerte)
+
+    return raised
+
+
 async def gps_monitor_scheduler(interval_minutes: int, silence_minutes: int) -> None:
     """Boucle de surveillance (tache de fond) / Monitoring background loop."""
     from app.database import async_session
@@ -186,8 +300,17 @@ async def gps_monitor_scheduler(interval_minutes: int, silence_minutes: int) -> 
             async with async_session() as session:
                 raised = await detect_gps_silence(session, silence_minutes=silence_minutes)
                 if raised:
-                    await session.commit()
                     logger.warning("Coupure GPS detectee sur %d tournee(s)", len(raised))
+                absents = await detect_devices_away_from_base(
+                    session,
+                    radius_km=settings.DEVICE_BASE_RADIUS_KM,
+                    quiet_minutes=settings.DEVICE_BASE_QUIET_MINUTES,
+                )
+                if absents:
+                    logger.warning(
+                        "Telephone(s) non rentre(s) sur base : %d", len(absents))
+                if raised or absents:
+                    await session.commit()
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -71,6 +71,19 @@ class Settings(BaseSettings):
     GPS_SILENCE_ALERT_MINUTES: int = 30
     GPS_MONITOR_INTERVAL_MINUTES: int = 5
 
+    # Telephone non rentre sur base (#99). Distance au-dela de laquelle la
+    # derniere position connue d'une tournee terminee ne peut plus passer pour
+    # « sur la base ». 3 km est volontairement large : les coordonnees des
+    # bases sont approximatives (les deux tournees mesurees en prod finissent a
+    # 1,7 km de Gosselies SEC) et une alerte qui crie au loup ne sera plus lue.
+    # A resserrer quand les coordonnees des bases auront ete verifiees. /
+    # Deliberately generous: base coordinates are approximate.
+    DEVICE_BASE_RADIUS_KM: float = 3.0
+    # On ne juge qu'une fois le telephone silencieux : tant qu'il emet, il est
+    # peut-etre encore sur la route du retour. / Only judge a phone that has
+    # stopped emitting.
+    DEVICE_BASE_QUIET_MINUTES: int = 45
+
     # Paramètres par défaut / Default parameters
     DEFAULT_COMMERCIAL_SPEED_KMH: float = 60.0
     DEFAULT_MAX_DAILY_HOURS: float = 10.0

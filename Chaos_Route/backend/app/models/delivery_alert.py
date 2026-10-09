@@ -22,6 +22,11 @@ class AlertType(str, enum.Enum):
     LONG_STOP = "LONG_STOP"
     LONG_TRAVEL = "LONG_TRAVEL"
     NO_GPS = "NO_GPS"
+    # Le telephone n'est pas rentre avec le camion (#99) : sa derniere position
+    # connue est loin de la base de retour. Anti-perte de materiel, dans le
+    # cadre declare au registre — on regarde la fin d'une tournee, pas la vie
+    # privee de quelqu'un. / Phone did not come back to base.
+    DEVICE_NOT_AT_BASE = "DEVICE_NOT_AT_BASE"
 
 
 class AlertSeverity(str, enum.Enum):

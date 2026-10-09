@@ -128,6 +128,7 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   LONG_STOP: 'Arret trop long',
   LONG_TRAVEL: 'Trajet trop long',
   NO_GPS: 'GPS coupe',
+  DEVICE_NOT_AT_BASE: 'Telephone hors base',
 }
 
 export default function Tracking() {

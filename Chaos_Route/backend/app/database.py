@@ -325,7 +325,7 @@ async def _migrate_enum_values():
         # depuis des semaines et etaient absentes de l'enum PostgreSQL. /
         # This list is MANUAL: a value added to a Python Enum and not mirrored
         # here is missing in the database.
-        ("alerttype", ["PICKUP_PARTIAL", "PICKUP_LOSS"]),
+        ("alerttype", ["PICKUP_PARTIAL", "PICKUP_LOSS", "DEVICE_NOT_AT_BASE"]),
     ]
     async with engine.begin() as conn:
         for enum_name, new_values in enum_updates:

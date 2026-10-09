@@ -4,7 +4,19 @@ uvicorn[standard]>=0.53.0
 python-multipart>=0.0.32
 
 # Database
-sqlalchemy>=2.0.54
+# L'extra [asyncio] n'est pas decoratif : il tire `greenlet`, sans lequel
+# `sqlalchemy.ext.asyncio` refuse de s'importer et l'application ne demarre
+# pas du tout. SQLAlchemy 2.0 l'installait d'office sur nos plateformes,
+# 2.1 ne le fait plus — un simple plancher a donc suffi a casser la prod au
+# premier build sans cache (2026-10-09), alors que les tests passaient en
+# local avec l'ancienne version resolue.
+# Plafond < 2.1 assume : la version majeure suivante se valide avec une passe
+# de tests dediee, pas comme effet de bord d'une montee de plancher. Le
+# cloisonnement multi-tenant repose sur les evenements SQLAlchemy — c'est une
+# frontiere de securite, elle ne change pas de version par accident. /
+# [asyncio] pulls greenlet (2.1 no longer does); the <2.1 ceiling is
+# deliberate: tenant isolation rides on SQLAlchemy events.
+sqlalchemy[asyncio]>=2.0.54,<2.1
 alembic>=1.20.0
 aiosqlite>=0.22.1
 asyncpg>=0.31.0

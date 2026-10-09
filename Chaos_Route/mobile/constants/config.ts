@@ -6,6 +6,12 @@ export const API_BASE_URL = 'https://chaosroute.chaosmanager.tech/api'
 // Intervalles GPS / GPS intervals
 export const GPS_INTERVAL_MS = 180_000  // 3 minutes
 export const GPS_DISTANCE_MIN_M = 50     // 50 metres minimum
+// Duree maximale d'une session de suivi. Le suivi s'arrete normalement a la
+// cloture de la tournee ; ce plafond n'existe que pour le cas ou la cloture
+// n'arrive jamais (tournee oubliee, app fermee toute la nuit). La notice RGPD
+// promet l'absence de suivi hors heures de travail : sans ce garde-fou, la
+// promesse ne tiendrait pas. / Backstop for a tour that is never closed.
+export const GPS_MAX_SESSION_MS = 14 * 60 * 60 * 1000  // 14 h
 
 // Couleurs theme sombre / Dark theme colors (coherent with web)
 export const COLORS = {

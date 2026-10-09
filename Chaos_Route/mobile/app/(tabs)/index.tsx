@@ -18,27 +18,29 @@ import { COLORS } from '../../constants/config'
 import { TorchToggleButton } from '../../components/TorchToggleButton'
 import type { DriverTour, AvailableTour } from '../../types'
 
-/* Une seule verification de consentement GPS par session d'app /
-   Check GPS consent only once per app session */
-let gpsConsentChecked = false
+/* Une seule verification de la notice GPS par session d'app /
+   Check the GPS notice only once per app session */
+let gpsNoticeChecked = false
 
 export default function TourListScreen() {
   const router = useRouter()
   const hasFeature = useDeviceStore((s) => s.hasFeature)
   const deviceId = useDeviceStore((s) => s.deviceId)
 
-  // RGPD (STIME A7) : si aucun choix de consentement GPS n'est enregistre,
-  // afficher la notice + choix. / Show GPS consent notice if no choice recorded.
+  // RGPD : si aucun accuse de lecture de la notice geolocalisation n'est
+  // enregistre pour cet appareil, l'afficher. Information, pas consentement —
+  // la base legale est l'interet legitime. / Show the GPS notice until it has
+  // been acknowledged; information, not consent.
   useEffect(() => {
-    if (gpsConsentChecked || !deviceId) return
-    gpsConsentChecked = true
-    api.get('/gdpr/consent/device/gps_tracking')
+    if (gpsNoticeChecked || !deviceId) return
+    gpsNoticeChecked = true
+    api.get('/gdpr/consent/device/gps_information')
       .then(({ data }) => {
         if (data?.granted === null || data?.granted === undefined) {
-          router.push('/gps-consent')
+          router.push('/gps-notice')
         }
       })
-      .catch(() => { gpsConsentChecked = false })  // reessaiera au prochain montage
+      .catch(() => { gpsNoticeChecked = false })  // reessaiera au prochain montage
   }, [deviceId, router])
   const [tours, setTours] = useState<DriverTour[]>([])
   const [availableTours, setAvailableTours] = useState<AvailableTour[]>([])
@@ -242,12 +244,12 @@ export default function TourListScreen() {
     <View style={styles.container}>
       <View style={styles.dateRow}>
         <Text style={styles.dateLabel}>{date}</Text>
-        {/* Accès permanent à la notice + choix GPS (RGPD) — les Réglages sont
-            réservés aux comptes, pas aux chauffeurs / Always-reachable GPS
-            consent (Settings are login-only, drivers can't reach them) */}
+        {/* Accès permanent à la note d'information GPS (RGPD) — les Réglages
+            sont réservés aux comptes, pas aux chauffeurs / Always-reachable GPS
+            notice (Settings are login-only, drivers can't reach them) */}
         <TouchableOpacity
           style={styles.privacyBtn}
-          onPress={() => router.push('/gps-consent')}
+          onPress={() => router.push('/gps-notice')}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Text style={styles.privacyText}>🛡 Confidentialité</Text>

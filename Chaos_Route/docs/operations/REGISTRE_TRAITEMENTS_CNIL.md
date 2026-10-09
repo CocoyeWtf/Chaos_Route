@@ -120,7 +120,9 @@ Suivi en temps reel de la position des vehicules de livraison pendant les tourne
 | Information des employes (article L.1222-4 du Code du travail) | **[A verifier]** |
 | Consultation du CSE / representants du personnel | **[A verifier]** |
 | Declaration / information de la CNIL (si AIPD revele risque eleve residuel) | **[A verifier apres AIPD]** |
-| Desactivation hors heures de travail | **[A verifier -- implementation technique]** |
+| Desactivation hors heures de travail | **Implemente** -- la transmission ne se fait que pendant une tournee assignee et cesse a sa cloture |
+| Information individuelle tracee (accuse de lecture de la notice) | **Implemente** -- notice versionnee + journal append-only par appareil |
+| Detection des coupures de signal | **Implemente** -- alerte `NO_GPS` nominative des qu'une tournee en cours cesse d'emettre (aucune application ne peut empecher la desactivation de la permission systeme : seul un MDM le pourrait) |
 
 ### Categories de personnes concernees
 

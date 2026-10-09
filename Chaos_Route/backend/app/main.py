@@ -55,8 +55,17 @@ async def lifespan(app: FastAPI):
     async with async_session() as session:
         await ensure_default_policies(session)
     retention_task = asyncio.create_task(retention_scheduler())
+    # Surveillance GPS : une tournee en cours devenue muette leve une alerte
+    # NO_GPS. C'est la seule parade a la desactivation volontaire de la
+    # localisation, qu'aucune app ne peut empecher. / GPS silence monitoring.
+    from app.services.gps_monitoring import gps_monitor_scheduler
+    gps_monitor_task = asyncio.create_task(gps_monitor_scheduler(
+        interval_minutes=settings.GPS_MONITOR_INTERVAL_MINUTES,
+        silence_minutes=settings.GPS_SILENCE_ALERT_MINUTES,
+    ))
     yield
     retention_task.cancel()
+    gps_monitor_task.cancel()
 
 
 # 3C. Desactiver Swagger en production / Disable Swagger in production

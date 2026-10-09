@@ -20,6 +20,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.audit import AuditLog
 from app.models.delivery_alert import AlertSeverity, AlertType, DeliveryAlert
+from app.services.gps_monitoring import raise_no_gps_alert
 from app.models.device_assignment import DeviceAssignment
 from app.models.gps_position import GPSPosition
 from app.models.mobile_device import MobileDevice
@@ -43,6 +44,7 @@ from app.schemas.mobile import (
     DriverTourRead,
     DriverTourStopRead,
     GPSBatchCreate,
+    GPSStatusReport,
     ManifestCheckResponse,
     PickupRefusalCreate,
     PickupSummaryItem,
@@ -564,6 +566,68 @@ async def switch_driver(
     return {"status": "ok", "old_driver": old_name, "new_driver": new_name}
 
 
+@router.post("/gps-status")
+async def report_gps_status(
+    data: GPSStatusReport,
+    db: AsyncSession = Depends(get_db),
+    device: MobileDevice = Depends(get_authenticated_device),
+):
+    """L'app signale que la localisation est coupee / App reports location is off.
+
+    Une app ne peut pas empecher un chauffeur de refuser la permission de
+    localisation — seul un MDM le peut. Elle peut en revanche le DIRE tout de
+    suite, ce qui transforme une disparition silencieuse en alerte nominative
+    sur l'ecran du trafic. / An app cannot prevent permission denial, but it can
+    report it immediately.
+    """
+    assignment = (await db.execute(
+        select(DeviceAssignment).where(
+            DeviceAssignment.tour_id == data.tour_id,
+            DeviceAssignment.device_id == device.id,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=403, detail="Device not assigned to this tour")
+
+    if data.status == "ok":
+        return {"ok": True, "alert_raised": False}
+
+    tour = await db.get(Tour, data.tour_id)
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+
+    driver = tour.driver_name or "chauffeur inconnu"
+    if data.status == "denied":
+        # Refus delibere : quelqu'un a decoche la permission. C'est le cas qui
+        # interesse l'exploitation. / Deliberate denial.
+        message = (
+            f"Localisation REFUSEE sur le telephone de {driver} "
+            f"(tournee {tour.code}) — aucune position ne sera transmise."
+        )
+        severity = AlertSeverity.CRITICAL
+    else:
+        message = (
+            f"GPS indisponible sur le telephone de {driver} "
+            f"(tournee {tour.code}){f' — {data.detail}' if data.detail else ''}."
+        )
+        severity = AlertSeverity.WARNING
+
+    alert = await raise_no_gps_alert(
+        db, tour, message, device_id=device.id, severity=severity,
+    )
+    if alert is not None:
+        await manager.broadcast(tenant_id=device.tenant_id, message={
+            "type": "no_gps",
+            "tour_id": tour.id,
+            "tour_code": tour.code,
+            "driver_name": tour.driver_name,
+            "status": data.status,
+            "message": message,
+        })
+
+    return {"ok": True, "alert_raised": alert is not None}
+
+
 @router.post("/gps")
 @limiter.limit(settings.RATE_LIMIT_GPS)
 async def submit_gps_batch(
@@ -582,14 +646,6 @@ async def submit_gps_batch(
     )
     if not assignment_result.scalar_one_or_none():
         raise HTTPException(status_code=403, detail="Device not assigned to this tour")
-
-    # Opt-out geolocalisation (RGPD, STIME A7) : si le chauffeur a refuse le
-    # suivi, les positions sont ignorees cote serveur (defense en profondeur,
-    # meme si l'app cesse d'emettre) / GPS opt-out: drop positions server-side.
-    from app.services.consent import GPS_TRACKING, get_latest_consent
-    consent = await get_latest_consent(db, GPS_TRACKING, device_id=device.id)
-    if consent is not None and not consent.granted:
-        return {"inserted": 0, "detail": "Suivi GPS refuse par le chauffeur (opt-out)"}
 
     positions = []
     for pos in data.positions:
@@ -1020,6 +1076,7 @@ async def scan_support(
         barcode=data.barcode,
         latitude=data.latitude,
         longitude=data.longitude,
+        accuracy=data.accuracy,
         timestamp=data.timestamp,
         expected_at_stop=expected,
     )

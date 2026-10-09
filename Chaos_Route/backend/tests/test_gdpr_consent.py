@@ -1,8 +1,9 @@
-"""Tests remédiation STIME A7 — consentement GPS + portabilité RGPD (Art. 20).
+"""Tests remédiation STIME A7 — information GPS + portabilité RGPD (Art. 20).
 
-Couvre : notice d'information versionnée, enregistrement append-only du choix
-du chauffeur, opt-out effectif à l'ingestion GPS (défense en profondeur),
-export self-service /my-data, export chauffeur externe par plaque.
+Couvre : notice d'information versionnée, accusé de lecture append-only
+(preuve de l'information individuelle, L.1222-4), **absence d'opt-out en
+libre-service** — la géolocalisation repose sur l'intérêt légitime, pas sur le
+consentement — export self-service /my-data, export chauffeur par plaque.
 """
 
 import uuid
@@ -56,13 +57,20 @@ async def test_gps_privacy_notice_is_public_and_versioned(client):
 
 
 @pytest.mark.asyncio
-async def test_consent_flow_and_gps_opt_out(client, db_session, test_region):
+async def test_notice_is_acknowledged_and_never_gates_ingestion(client, db_session, test_region):
+    """La notice s'accuse, elle ne se refuse pas — et rien ne coupe l'ingestion.
+
+    Regression garde-fou : un opt-out en libre-service suffisait a rendre un
+    vehicule invisible d'un seul bouton, alors meme que le registre CNIL fonde
+    le traitement sur l'interet legitime. Ce test verrouille le fait qu'aucun
+    enregistrement, meme un ancien refus, n'arrete la captation.
+    """
     device = await _make_device(db_session)
     tour = await _make_tour_with_assignment(db_session, test_region, device)
     headers = {"X-Device-ID": device.device_identifier}
 
-    # Aucun choix enregistré : granted=None (l'app doit afficher la notice)
-    resp = await client.get("/api/gdpr/consent/device/gps_tracking", headers=headers)
+    # Aucun accuse de lecture : l'app doit afficher la notice
+    resp = await client.get("/api/gdpr/consent/device/gps_information", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["granted"] is None
 
@@ -74,43 +82,55 @@ async def test_consent_flow_and_gps_opt_out(client, db_session, test_region):
         }],
     }
 
-    # Sans refus explicite, l'ingestion fonctionne (intérêt légitime + notice)
+    # L'ingestion fonctionne avant meme l'accuse de lecture
     resp = await client.post("/api/driver/gps", json=gps_payload, headers=headers)
     assert resp.status_code == 200, resp.text
     assert resp.json()["inserted"] == 1
 
-    # Le chauffeur refuse le suivi / Driver opts out
+    # Le chauffeur accuse reception de la notice / Driver acknowledges the notice
     resp = await client.post(
         "/api/gdpr/consent/device",
-        json={"consent_type": "gps_tracking", "granted": False, "subject_name": "Chauffeur Test"},
+        json={"consent_type": "gps_information", "granted": True,
+              "subject_name": "Chauffeur Test", "info_version": "2.0-2026-09"},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
 
-    resp = await client.get("/api/gdpr/consent/device/gps_tracking", headers=headers)
-    assert resp.json()["granted"] is False
+    resp = await client.get("/api/gdpr/consent/device/gps_information", headers=headers)
+    assert resp.json()["granted"] is True
 
-    # Les positions sont désormais ignorées côté serveur / Positions now dropped
-    resp = await client.post("/api/driver/gps", json=gps_payload, headers=headers)
-    assert resp.status_code == 200
-    assert resp.json()["inserted"] == 0
-
-    # Le chauffeur ré-accepte : l'ingestion reprend (journal append-only)
+    # Un refus enregistre sous l'ANCIEN type ne coupe plus rien /
+    # A legacy refusal no longer stops anything
     resp = await client.post(
         "/api/gdpr/consent/device",
-        json={"consent_type": "gps_tracking", "granted": True},
+        json={"consent_type": "gps_tracking", "granted": False},
         headers=headers,
     )
     assert resp.status_code == 200
     resp = await client.post("/api/driver/gps", json=gps_payload, headers=headers)
-    assert resp.json()["inserted"] == 1
+    assert resp.status_code == 200
+    assert resp.json()["inserted"] == 1, "un ancien opt-out ne doit plus couper l'ingestion"
 
-    # Traçabilité : le journal contient les deux choix / Log holds both choices
+    # Tracabilite : le journal reste append-only / Journal stays append-only
     resp = await client.get("/api/gdpr/consents/")
     assert resp.status_code == 200
     records = [c for c in resp.json() if c["device_id"] == device.id]
     assert len(records) == 2
-    assert {r["granted"] for r in records} == {True, False}
+    assert {r["consent_type"] for r in records} == {"gps_information", "gps_tracking"}
+
+
+@pytest.mark.asyncio
+async def test_notice_states_legitimate_interest_not_consent(client):
+    """La notice doit annoncer la bonne base legale, sinon elle desinforme."""
+    resp = await client.get("/api/gdpr/privacy-notice/gps")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["version"] == "2.0-2026-09"
+    text = data["text"]
+    assert "int" in text and "6.1.f" in text            # intérêt légitime
+    assert "L.1222-4" in text                            # information du salarié
+    assert "ne repose pas sur votre consentement" in text
+    assert "60 jours" in text
 
 
 @pytest.mark.asyncio

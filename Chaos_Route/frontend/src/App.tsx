@@ -42,6 +42,7 @@ const AuditLog = lazy(() => import('./pages/AuditLog'))
 const Help = lazy(() => import('./pages/Help'))
 const DeviceManagement = lazy(() => import('./pages/DeviceManagement'))
 const Tracking = lazy(() => import('./pages/Tracking'))
+const SupportScanTrace = lazy(() => import('./pages/SupportScanTrace'))
 const SupportTypes = lazy(() => import('./pages/SupportTypes'))
 const BaseSupportRules = lazy(() => import('./pages/BaseSupportRules'))
 const PdvPickupRequests = lazy(() => import('./pages/PdvPickupRequests'))
@@ -131,6 +132,7 @@ export default function App() {
             <Route path="/admin/roles" element={<RoleManagement />} />
             <Route path="/devices" element={<DeviceManagement />} />
             <Route path="/tracking" element={<Tracking />} />
+            <Route path="/support-scans" element={<SupportScanTrace />} />
             <Route path="/support-types" element={<SupportTypes />} />
             <Route path="/base-support-rules" element={<BaseSupportRules />} />
             <Route path="/pickup-requests" element={<PdvPickupRequests />} />

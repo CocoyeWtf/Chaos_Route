@@ -75,16 +75,23 @@ export default function TourDetailScreen() {
     return () => clearTimeout(timeout)
   }, [tour?.status])
 
-  // Demarrer GPS auto / Auto-start GPS
+  // Demarrer / arreter le suivi selon l'etat de la TOURNEE, jamais selon
+  // l'ecran affiche. Cet effet n'arrete surtout rien au demontage : le
+  // chauffeur passe son temps a naviguer vers les scans et a revenir, et
+  // couper a chaque fois figeait son marqueur sur la carte d'exploitation.
+  // Le suivi s'arrete a la cloture reelle, ou via le garde-fou de duree du
+  // service. / Tracking follows the tour's state, never the screen's: no stop
+  // on unmount.
   useEffect(() => {
-    if (!tour || tour.status === 'COMPLETED') return
+    if (!tour) return
+    if (tour.status === 'COMPLETED') {
+      stopGPSTracking().then(() => setGpsActive(false))
+      return
+    }
     startGPSTracking(tourId).then((ok) => {
       setGpsActive(ok)
       if (!ok) console.warn('GPS tracking failed to start — permissions not granted')
     })
-    return () => {
-      stopGPSTracking()
-    }
   }, [tour?.status, tourId])
 
   const handleCloseStop = (stopId: number, pdvName: string) => {

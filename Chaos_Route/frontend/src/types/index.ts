@@ -1150,6 +1150,38 @@ export interface Declaration {
   photos: DeclarationPhoto[]
 }
 
+/* ─── Tracabilite des scans supports / Support scan traceability ─── */
+
+export interface SupportScanTrace {
+  id: number
+  barcode: string
+  timestamp: string                    // ISO 8601 — date + heure du scan
+  latitude?: number | null
+  longitude?: number | null
+  accuracy?: number | null
+  distance_to_pdv_m?: number | null    // Ecart scan <-> coordonnees du PDV
+  expected_at_stop: boolean
+  expected_pdv_code?: string | null
+  tour_id?: number | null
+  tour_code?: string | null
+  delivery_date?: string | null
+  driver_name?: string | null
+  carrier_id?: number | null
+  carrier_code?: string | null
+  carrier_name?: string | null
+  contract_code?: string | null
+  pdv_id?: number | null
+  pdv_code?: string | null
+  pdv_name?: string | null
+  pdv_city?: string | null
+  pdv_latitude?: number | null
+  pdv_longitude?: number | null
+  base_id?: number | null
+  base_name?: string | null
+  device_id?: number | null
+  device_name?: string | null
+}
+
 /* ─── Consignment Tracking (Zèbre) ─── */
 
 export interface ConsignmentMovement {

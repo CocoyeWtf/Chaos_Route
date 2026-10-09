@@ -8,6 +8,7 @@ import {
 import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as Application from 'expo-application'
+import { resumeGPSTrackingIfNeeded } from '../services/gps'
 import { useDeviceStore } from '../stores/useDeviceStore'
 import { useAuthStore } from '../stores/useAuthStore'
 import { COLORS } from '../constants/config'
@@ -73,6 +74,23 @@ export default function RootLayout() {
     loadDevice()
     loadSession()
   }, [loadDevice, loadSession])
+
+  // Reprendre un suivi de tournee interrompu par la fermeture de l'app, et
+  // vider la file de positions restees en attente. Sans cela, tuer
+  // l'application mettait fin au suivi d'une tournee pourtant en cours, et les
+  // positions accumulees hors ligne partaient a la poubelle. / Resume tracking
+  // and flush the offline backlog after an app restart.
+  //
+  // On attend l'enregistrement de l'appareil : la reprise interroge l'API pour
+  // savoir si la tournee a ete cloturee entre-temps, et cet appel a besoin de
+  // l'en-tete X-Device-ID. / Wait for device registration: the resume calls the
+  // API, which needs the device header.
+  const gpsResumedRef = useRef(false)
+  useEffect(() => {
+    if (isLoading || !isRegistered || gpsResumedRef.current) return
+    gpsResumedRef.current = true
+    resumeGPSTrackingIfNeeded().catch((e) => console.warn('GPS resume failed:', e))
+  }, [isLoading, isRegistered])
 
   // Verification mise a jour au lancement / Check for update on launch
   useEffect(() => {

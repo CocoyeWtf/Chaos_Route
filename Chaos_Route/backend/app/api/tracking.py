@@ -1,25 +1,48 @@
 """Routes suivi temps reel web / Real-time web tracking routes."""
 
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
+from app.models.carrier import Carrier
+from app.models.contract import Contract
 from app.models.delivery_alert import DeliveryAlert
 from app.models.gps_position import GPSPosition
+from app.models.mobile_device import MobileDevice
 from app.models.pdv import PDV
 from app.models.stop_event import StopEvent
+from app.models.support_scan import SupportScan
 from app.models.tour import Tour, TourStatus
+from app.models.tour_manifest_line import TourManifestLine
 from app.models.tour_stop import TourStop
 from app.models.base_logistics import BaseLogistics
 from app.models.user import User
-from app.schemas.mobile import DeliveryAlertRead, DriverPositionRead, GPSPositionRead, TrackingDashboard
+from app.schemas.mobile import (
+    DeliveryAlertRead,
+    DriverPositionRead,
+    GPSPositionRead,
+    SupportScanTraceRead,
+    TrackingDashboard,
+)
+from app.utils.geo import haversine
 from app.api.deps import require_permission, get_user_region_ids
 
 router = APIRouter()
+
+
+# Date operationnelle d'une tournee / A tour's operational date.
+# `delivery_date` est nullable : elle n'est posee qu'a la planification, et
+# seulement si le planificateur la transmet. Tout le reste du code lit
+# `delivery_date or date` — le suivi doit faire pareil, sinon une tournee sans
+# date de livraison disparait purement et simplement de la carte. /
+# delivery_date is nullable; fall back to the tour's own date like the rest of
+# the codebase does, or the tour vanishes from the live map.
+def _tour_day():
+    return func.coalesce(Tour.delivery_date, Tour.date)
 
 
 @router.get("/positions", response_model=list[DriverPositionRead])
@@ -34,7 +57,7 @@ async def get_latest_positions(
 
     # Trouver les tours actifs / Find active tours
     query = select(Tour).where(
-        Tour.delivery_date == target_date,
+        _tour_day() == target_date,
         Tour.status.in_([TourStatus.IN_PROGRESS, TourStatus.VALIDATED, TourStatus.RETURNING]),
     )
     if base_id is not None:
@@ -212,7 +235,7 @@ async def get_active_stops(
     query = (
         select(Tour)
         .where(
-            Tour.delivery_date == target_date,
+            _tour_day() == target_date,
             Tour.status.in_([TourStatus.IN_PROGRESS, TourStatus.VALIDATED, TourStatus.RETURNING]),
         )
         .options(selectinload(Tour.stops).selectinload(TourStop.pdv))
@@ -272,7 +295,7 @@ async def get_dashboard(
     """Stats resume (actifs, completes, retards, alertes) / Dashboard summary stats."""
     target_date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    base_query = select(Tour).where(Tour.delivery_date == target_date)
+    base_query = select(Tour).where(_tour_day() == target_date)
     if base_id is not None:
         base_query = base_query.where(Tour.base_id == base_id)
 
@@ -303,3 +326,137 @@ async def get_dashboard(
         delayed_tours=0,  # Sera calcule plus tard / Will be computed later
         active_alerts=alert_count,
     )
+
+
+@router.get("/support-scans/", response_model=list[SupportScanTraceRead])
+async def list_support_scans(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    barcode: str | None = None,
+    pdv_id: int | None = None,
+    carrier_id: int | None = None,
+    tour_id: int | None = None,
+    base_id: int | None = None,
+    driver: str | None = None,
+    only_geolocated: bool = False,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tracking", "read")),
+):
+    """Ou a-t-on scanne quel support, quand, par qui et pour quel transporteur.
+
+    Where each support was scanned, when, by whom, under which carrier.
+
+    Le transporteur n'est pas porte par la tournee : il se deduit du contrat
+    affecte (Tour -> Contract -> Carrier). Une tournee sans contrat est une
+    tournee en propre — carrier_name reste vide, ce n'est pas une anomalie. /
+    Carrier is derived from the tour's contract; no contract = own fleet.
+    """
+    query = (
+        select(SupportScan, TourStop, Tour, PDV, Contract, Carrier, BaseLogistics, MobileDevice)
+        .join(TourStop, SupportScan.tour_stop_id == TourStop.id)
+        .join(Tour, TourStop.tour_id == Tour.id)
+        .outerjoin(PDV, TourStop.pdv_id == PDV.id)
+        .outerjoin(Contract, Tour.contract_id == Contract.id)
+        .outerjoin(Carrier, Contract.carrier_id == Carrier.id)
+        .outerjoin(BaseLogistics, Tour.base_id == BaseLogistics.id)
+        .outerjoin(MobileDevice, SupportScan.device_id == MobileDevice.id)
+    )
+
+    # Bornes de dates sur le timestamp ISO : comparaison lexicographique, donc
+    # borne haute = lendemain exclu (evite de rater les scans de fin de journee
+    # et les fuseaux decales). / ISO timestamps compare lexicographically, so
+    # the upper bound is the exclusive next day.
+    if date_from:
+        query = query.where(SupportScan.timestamp >= date_from)
+    if date_to:
+        try:
+            next_day = (date_cls.fromisoformat(date_to) + timedelta(days=1)).isoformat()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="date_to invalide (attendu AAAA-MM-JJ)")
+        query = query.where(SupportScan.timestamp < next_day)
+
+    if barcode:
+        query = query.where(SupportScan.barcode.ilike(f"%{barcode.strip()}%"))
+    if pdv_id is not None:
+        query = query.where(TourStop.pdv_id == pdv_id)
+    if tour_id is not None:
+        query = query.where(Tour.id == tour_id)
+    if base_id is not None:
+        query = query.where(Tour.base_id == base_id)
+    if driver:
+        query = query.where(Tour.driver_name.ilike(f"%{driver.strip()}%"))
+    if carrier_id is not None:
+        query = query.where(Contract.carrier_id == carrier_id)
+    if only_geolocated:
+        query = query.where(SupportScan.latitude.is_not(None), SupportScan.longitude.is_not(None))
+
+    # Scope region (meme regle que les positions temps reel) / Region scope
+    region_ids = get_user_region_ids(user)
+    if region_ids is not None:
+        query = query.where(BaseLogistics.region_id.in_(region_ids))
+
+    query = query.order_by(SupportScan.timestamp.desc(), SupportScan.id.desc()).limit(limit).offset(offset)
+    rows = (await db.execute(query)).all()
+
+    # PDV attendu au manifeste, charge en un coup pour la page / Expected PDV
+    # from the WMS manifest, loaded in one go for the page.
+    tour_ids = {t.id for _, _, t, *_ in rows}
+    barcodes = {sc.barcode for sc, *_ in rows}
+    expected_map: dict[tuple[int, str], str] = {}
+    if tour_ids and barcodes:
+        manifest_rows = (await db.execute(
+            select(TourManifestLine.tour_id, TourManifestLine.support_number, TourManifestLine.pdv_code)
+            .where(
+                TourManifestLine.tour_id.in_(tour_ids),
+                TourManifestLine.support_number.in_(barcodes),
+            )
+        )).all()
+        expected_map = {(t_id, num): code for t_id, num, code in manifest_rows}
+
+    results: list[SupportScanTraceRead] = []
+    for scan, stop, tour, pdv, contract, carrier, base, device in rows:
+        distance_m = None
+        if (
+            scan.latitude is not None and scan.longitude is not None
+            and pdv is not None and pdv.latitude is not None and pdv.longitude is not None
+        ):
+            distance_m = round(
+                haversine(scan.latitude, scan.longitude, pdv.latitude, pdv.longitude) * 1000, 1
+            )
+
+        results.append(SupportScanTraceRead(
+            id=scan.id,
+            barcode=scan.barcode,
+            timestamp=scan.timestamp,
+            latitude=scan.latitude,
+            longitude=scan.longitude,
+            accuracy=scan.accuracy,
+            distance_to_pdv_m=distance_m,
+            expected_at_stop=scan.expected_at_stop,
+            expected_pdv_code=expected_map.get((tour.id, scan.barcode)),
+            tour_id=tour.id,
+            tour_code=tour.code,
+            delivery_date=tour.delivery_date or tour.date,
+            driver_name=tour.driver_name,
+            carrier_id=contract.carrier_id if contract else None,
+            carrier_code=carrier.code if carrier else None,
+            # Le nom du transporteur vient de la fiche Transporteur quand elle
+            # existe, sinon du libelle porte par le contrat. / Carrier name from
+            # the carrier record, else the contract's own label.
+            carrier_name=(carrier.name if carrier else (contract.transporter_name if contract else None)),
+            contract_code=contract.code if contract else None,
+            pdv_id=pdv.id if pdv else None,
+            pdv_code=pdv.code if pdv else None,
+            pdv_name=pdv.name if pdv else None,
+            pdv_city=pdv.city if pdv else None,
+            pdv_latitude=pdv.latitude if pdv else None,
+            pdv_longitude=pdv.longitude if pdv else None,
+            base_id=base.id if base else None,
+            base_name=base.name if base else None,
+            device_id=device.id if device else None,
+            device_name=device.friendly_name if device else None,
+        ))
+
+    return results

@@ -13,6 +13,10 @@ class SupportScan(Base, TenantMixin):
     __table_args__ = (
         Index("ix_support_scans_tour_stop_id", "tour_stop_id"),
         Index("ix_support_scans_barcode", "barcode"),
+        # Tracabilite « ou a-t-on scanne quoi » : la consultation web filtre par
+        # plage de dates, l'index evite un seq scan sur toute la table. /
+        # Web traceability view filters by date range.
+        Index("ix_support_scans_timestamp", "timestamp"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -21,5 +25,9 @@ class SupportScan(Base, TenantMixin):
     barcode: Mapped[str] = mapped_column(String(100), nullable=False)
     latitude: Mapped[float | None] = mapped_column(Float)
     longitude: Mapped[float | None] = mapped_column(Float)
+    # Precision du point en metres (rayon a 68 %) : sans elle, impossible de
+    # distinguer un scan reellement localise d'un point radio a 2 km. /
+    # Fix accuracy in metres — tells a real fix from a 2 km cell-tower guess.
+    accuracy: Mapped[float | None] = mapped_column(Float)
     timestamp: Mapped[str] = mapped_column(String(32), nullable=False)  # ISO 8601
     expected_at_stop: Mapped[bool] = mapped_column(Boolean, default=True)

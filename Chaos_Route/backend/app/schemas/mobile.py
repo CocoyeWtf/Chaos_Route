@@ -91,6 +91,19 @@ class GPSBatchCreate(BaseModel):
     tour_id: int
     positions: list[GPSPositionCreate] = Field(max_length=100)
 
+class GPSStatusReport(BaseModel):
+    """Etat de la localisation signale par l'app / Location status reported by the app.
+
+    Permet de savoir POURQUOI un telephone n'emet pas — permission refusee ou
+    GPS indisponible — sans attendre que le detecteur de silence conclue au
+    bout d'une demi-heure. / Tells why a phone is silent, without waiting for
+    the server-side silence detector.
+    """
+    tour_id: int
+    status: str = Field(pattern=r"^(ok|denied|unavailable)$")
+    detail: str | None = Field(default=None, max_length=200)
+
+
 class GPSPositionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -131,6 +144,7 @@ class SupportScanCreate(BaseModel):
     barcode: str = Field(min_length=1, max_length=50, pattern=r"^[A-Za-z0-9\-_]+$")
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
+    accuracy: float | None = Field(default=None, ge=0)
     timestamp: str = Field(max_length=30)
 
 class SupportScanRead(BaseModel):
@@ -143,6 +157,50 @@ class SupportScanRead(BaseModel):
     expected_pdv_code: str | None = None   # PDV attendu selon manifeste / Expected PDV from manifest
     latitude: float | None = None
     longitude: float | None = None
+    accuracy: float | None = None
+
+
+class SupportScanTraceRead(BaseModel):
+    """Tracabilite d'un scan support pour la consultation web : ou, quand, par
+    qui, pour quel transporteur. / Web traceability of a support scan: where,
+    when, by whom, under which carrier."""
+    id: int
+    barcode: str
+    timestamp: str                          # ISO 8601 — date + heure du scan
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy: float | None = None
+    # Ecart entre le point de scan et les coordonnees connues du PDV : c'est
+    # ce chiffre, pas la seule presence d'un point, qui dit si le support a ete
+    # scanne au bon endroit. / Gap between scan point and the PDV's known
+    # coordinates — this, not the mere presence of a fix, tells if the support
+    # was scanned at the right place.
+    distance_to_pdv_m: float | None = None
+    expected_at_stop: bool = True
+    expected_pdv_code: str | None = None
+
+    tour_id: int | None = None
+    tour_code: str | None = None
+    delivery_date: str | None = None
+    driver_name: str | None = None
+
+    carrier_id: int | None = None
+    carrier_code: str | None = None
+    carrier_name: str | None = None         # Transporteur affecte / Assigned carrier
+    contract_code: str | None = None
+
+    pdv_id: int | None = None
+    pdv_code: str | None = None
+    pdv_name: str | None = None
+    pdv_city: str | None = None
+    pdv_latitude: float | None = None
+    pdv_longitude: float | None = None
+
+    base_id: int | None = None
+    base_name: str | None = None
+
+    device_id: int | None = None
+    device_name: str | None = None
 
 
 # ─── Manifest Check ───

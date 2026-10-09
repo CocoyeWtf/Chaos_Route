@@ -9,11 +9,11 @@ import {
   Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Vibration,
 } from 'react-native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import * as Location from 'expo-location'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import api from '../../../../../services/api'
 import { COLORS } from '../../../../../constants/config'
 import { TorchToggleButton } from '../../../../../components/TorchToggleButton'
+import { useScanLocation } from '../../../../../hooks/useScanLocation'
 import type { SupportScan } from '../../../../../types'
 
 export default function SupportScanScreen() {
@@ -35,6 +35,10 @@ export default function SupportScanScreen() {
   const [torchOn, setTorchOn] = useState(false)
   const lastScanRef = useRef<string>('')
   const lastScanTimeRef = useRef(0)
+
+  // Position tenue a jour pendant toute la session de scan / Position kept
+  // fresh for the whole scanning session
+  const { getFix, status: gpsStatus } = useScanLocation()
 
   /* Charger les scans existants avant d'activer le scanner / Load existing scans before enabling scanner */
   useEffect(() => {
@@ -66,18 +70,21 @@ export default function SupportScanScreen() {
     setLastScanned(`${data} (${type})`)
     setTimeout(() => setLastScanned(''), 2000)
 
-    // Obtenir la position GPS (quasi-instantane) / Get GPS position (near-instant)
-    let lat: number | undefined
-    let lon: number | undefined
-    try {
-      const loc = await Location.getLastKnownPositionAsync()
-      if (loc) { lat = loc.coords.latitude; lon = loc.coords.longitude }
-    } catch {}
+    // Position lue en memoire : aucun delai ajoute au scan, et un point
+    // perime est ecarte plutot qu'envoye. / Read from memory: no added
+    // latency, and a stale fix is dropped rather than sent.
+    const fix = getFix()
 
     // Envoyer au serveur en arriere-plan
     api.post<SupportScan>(
       `/driver/tour/${tourId}/stops/${tourStopId}/scan-support`,
-      { barcode: data, latitude: lat, longitude: lon, timestamp: new Date().toISOString() },
+      {
+        barcode: data,
+        latitude: fix?.latitude,
+        longitude: fix?.longitude,
+        accuracy: fix?.accuracy ?? undefined,
+        timestamp: new Date().toISOString(),
+      },
     ).then(({ data: scan }) => {
       setScans((prev) => [scan, ...prev])
       if (!scan.expected_at_stop) {
@@ -93,7 +100,7 @@ export default function SupportScanScreen() {
       console.warn('Support scan API error:', err?.response?.data?.detail || err.message)
       setScans((prev) => [{ id: Date.now(), tour_stop_id: tourStopId, barcode: data, timestamp: new Date().toISOString(), expected_at_stop: true }, ...prev])
     })
-  }, [scanning, isReady, tourId, tourStopId])
+  }, [scanning, isReady, tourId, tourStopId, getFix])
 
   /* Verifier manifeste + reprises en attente puis proposer cloture / Check manifest + pickups before offering closure */
   const checkManifestAndPickups = async () => {
@@ -304,6 +311,15 @@ export default function SupportScanScreen() {
             ) : (
               <Text style={styles.scanHint}>Pointez un code barre</Text>
             )}
+            {gpsStatus !== 'ok' ? (
+              <Text style={styles.gpsWarning}>
+                {gpsStatus === 'starting'
+                  ? 'GPS : acquisition...'
+                  : gpsStatus === 'denied'
+                    ? 'GPS refuse — scans sans position'
+                    : 'GPS indisponible — scans sans position'}
+              </Text>
+            ) : null}
           </View>
         </View>
       ) : (
@@ -434,6 +450,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginTop: 12,
+    textShadowColor: '#000',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 4,
+  },
+  gpsWarning: {
+    color: '#f59e0b',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 6,
     textShadowColor: '#000',
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 4,

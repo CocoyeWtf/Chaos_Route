@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     RATE_LIMIT_GPS: str = "30/minute"
     RATE_LIMIT_DEFAULT: str = "60/minute"
 
+    # Surveillance GPS / GPS monitoring
+    # Une tournee active qui n'emet plus pendant ce delai leve une alerte
+    # NO_GPS. Seuil genereux a dessein : le reseau mobile a des trous (tunnels,
+    # zones blanches) et l'app rejoue ses positions en differe — 30 min evite
+    # de crier au loup tout en rendant une coupure deliberee visible dans la
+    # demi-heure. / Deliberately generous: mobile coverage has holes.
+    GPS_SILENCE_ALERT_MINUTES: int = 30
+    GPS_MONITOR_INTERVAL_MINUTES: int = 5
+
     # Paramètres par défaut / Default parameters
     DEFAULT_COMMERCIAL_SPEED_KMH: float = 60.0
     DEFAULT_MAX_DAILY_HOURS: float = 10.0

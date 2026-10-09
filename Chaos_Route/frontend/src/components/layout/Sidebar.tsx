@@ -92,6 +92,7 @@ const navGroups: NavGroup[] = [
       { path: '/operations', label: 'nav.postier', icon: '📮', resource: 'operations' },
       { path: '/alerts', label: 'Alertes', icon: '🔔', resource: 'operations' },
       { path: '/tracking', label: 'Suivi chauffeurs', icon: '📡', resource: 'tracking' },
+      { path: '/support-scans', label: 'Tracabilite scans', icon: '📍', resource: 'tracking' },
       { path: '/base-reception', label: 'Reception reprises', icon: '📥', resource: 'pickup-requests' },
       { path: '/crate-management', label: 'Gestion casiers', icon: '🍺', resource: 'crate-requests' },
       { path: '/declarations', label: 'Declarations', icon: '⚠', resource: 'declarations' },

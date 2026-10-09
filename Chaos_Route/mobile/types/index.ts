@@ -52,6 +52,7 @@ export interface SupportScan {
   expected_pdv_code?: string
   latitude?: number
   longitude?: number
+  accuracy?: number
 }
 
 export interface DriverTour {

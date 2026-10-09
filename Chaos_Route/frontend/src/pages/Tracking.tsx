@@ -114,6 +114,22 @@ function InitialFitBounds({ bases }: { bases: BaseLogistics[] }) {
   return null
 }
 
+/* Libelles d'alertes / Alert type labels — le panneau affichait la constante
+   brute, illisible pour le trafic. / The panel showed the raw enum value. */
+const ALERT_TYPE_LABELS: Record<string, string> = {
+  WRONG_PDV: 'Mauvais PDV',
+  MISSING_SUPPORTS: 'Supports manquants',
+  UNEXPECTED_SUPPORT: 'Support inattendu',
+  FORCED_CLOSURE: 'Cloture forcee',
+  PICKUP_REFUSED: 'Reprise refusee',
+  PICKUP_PARTIAL: 'Reprise partielle',
+  PICKUP_LOSS: 'Ecart de reprise',
+  STOP_REOPENED: 'Arret rouvert',
+  LONG_STOP: 'Arret trop long',
+  LONG_TRAVEL: 'Trajet trop long',
+  NO_GPS: 'GPS coupe',
+}
+
 export default function Tracking() {
   const today = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(today)
@@ -470,7 +486,9 @@ export default function Tracking() {
                     {a.severity === 'CRITICAL' ? '!!!' : a.severity === 'WARNING' ? '!!' : 'i'}
                   </span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{a.alert_type}</div>
+                    <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
+                      {ALERT_TYPE_LABELS[a.alert_type] || a.alert_type}
+                    </div>
                     <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{a.message}</div>
                   </div>
                   <button

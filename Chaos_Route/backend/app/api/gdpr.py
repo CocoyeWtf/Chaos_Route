@@ -45,11 +45,17 @@ def _now_iso() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Consentement géolocalisation (STIME A7 / action DPIA A3)
+# Géolocalisation : information (accusé de lecture) et journal des choix
+# historiques (STIME A7 / action DPIA A3). Voir app/services/consent.py : la
+# captation ne dépend plus d'un consentement, c'est l'information qui est tracée.
 # ---------------------------------------------------------------------------
 
 class ConsentInput(BaseModel):
-    """Choix de consentement transmis par l'app mobile / Consent choice from the app."""
+    """Accusé de lecture de la notice, ou choix historique / Notice acknowledgement.
+
+    `granted=True` sur le type `gps_information` signifie « notice lue », pas
+    « je consens » : la géolocalisation repose sur l'intérêt légitime. /
+    granted=True on gps_information means "notice read", not consent."""
     consent_type: str = Field(default=GPS_TRACKING, max_length=50)
     granted: bool
     subject_name: str | None = Field(default=None, max_length=150)
@@ -58,8 +64,8 @@ class ConsentInput(BaseModel):
 
 @router.get("/privacy-notice/gps")
 async def gps_privacy_notice():
-    """Notice d'information géolocalisation (publique, affichée avant le choix) /
-    GPS privacy notice (public, displayed before the choice)."""
+    """Notice d'information géolocalisation, affichée par l'app mobile /
+    GPS privacy notice, displayed by the mobile app."""
     return {"version": GPS_PRIVACY_NOTICE_VERSION, "text": GPS_PRIVACY_NOTICE}
 
 
@@ -101,7 +107,7 @@ async def get_device_consent(
 ):
     """État courant du consentement pour cet appareil / Current consent state.
 
-    granted=None : aucun choix enregistré (l'app doit afficher la notice).
+    granted=None : rien d'enregistré pour ce type (l'app doit afficher la notice).
     """
     latest = await get_latest_consent(db, consent_type, device_id=device.id)
     return {

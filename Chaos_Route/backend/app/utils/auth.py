@@ -68,6 +68,13 @@ RESOURCES = [
     "base-drivers",
     "tour-stop-modify",
     "tour-unschedule",  # Retirer la planification d'un tour (transport, pas le postier)
+    # Board de tickets (#102). La ressource etait deja lue par le code
+    # (`require_permission("tickets", "update")`) mais absente de cette liste :
+    # aucun role ne pouvait donc la porter, et le board restait ouvert a tout
+    # utilisateur authentifie. Elle est desormais cochable, ce qui permet de le
+    # fermer aux profils PDV. / The resource was already enforced in code but
+    # not listed here, so no role could hold it.
+    "tickets",
     "consolidation",  # Multi-tenance : lève le cloisonnement tenant (lecture multi-société)
 ]
 ACTIONS = ["read", "create", "update", "delete"]

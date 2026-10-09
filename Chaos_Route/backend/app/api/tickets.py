@@ -1,8 +1,23 @@
 """Routes Tickets / Ticket board API.
 
-Board TRANSPARENT : tout utilisateur authentifié voit tous les tickets et tous
-les échanges. Chaque action (création, commentaire, changement de statut) est
-horodatée et attribuée → traçabilité complète (litige, bilan annuel).
+Board TRANSPARENT pour ceux qui y ont accès : tout utilisateur qui porte
+`tickets:read` voit tous les tickets et tous les échanges — il n'y a pas de
+demi-visibilité, un ticket n'est jamais caché à quelqu'un qui a le board.
+Chaque action (création, commentaire, changement de statut) est horodatée et
+attribuée → traçabilité complète (litige, bilan annuel).
+
+L'accès est une permission de rôle depuis le #102 : le board était jusque-là
+ouvert à tout utilisateur authentifié, donc visible des comptes PDV. Les quatre
+actions sont distinctes et cochables séparément :
+  - `read`   : voir le board et les échanges (sans elle, plus rien n'est lisible) ;
+  - `create` : ouvrir un ticket, répondre, joindre une capture ;
+  - `update` : modifier le ticket d'autrui et changer statut/priorité (admin) ;
+  - `delete` : supprimer le ticket d'autrui.
+L'auteur garde la main sur SON ticket (modification, suppression, retrait de ses
+photos) même sans `update`/`delete` : c'est lui qui l'a ouvert, et un demandeur
+doit pouvoir corriger ou retirer sa propre demande. /
+Board access is a role permission since #102; the author keeps control of their
+own ticket without the admin actions.
 """
 
 import io
@@ -20,7 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user, require_permission
+from app.api.deps import require_permission
 from app.database import get_db
 from app.models.ticket import Ticket, TicketComment, TicketPhoto, TicketStatus, TicketType, TicketPriority
 from app.models.user import User
@@ -48,6 +63,15 @@ def _user_has_permission(user: User, resource: str, action: str) -> bool:
 def _can_edit_ticket(user: User, ticket: Ticket) -> bool:
     """Auteur du ticket OU administrateur (tickets:update) / Ticket author OR admin."""
     return ticket.created_by_user_id == user.id or _user_has_permission(user, "tickets", "update")
+
+
+def _can_delete_ticket(user: User, ticket: Ticket) -> bool:
+    """Auteur du ticket OU `tickets:delete` (#102) / Ticket author OR tickets:delete.
+
+    La suppression a sa propre permission : elle efface les échanges et les
+    photos avec le ticket, ce n'est pas la même autorité que corriger un titre.
+    / Deleting cascades to the exchanges and photos — hence its own action."""
+    return ticket.created_by_user_id == user.id or _user_has_permission(user, "tickets", "delete")
 
 # Stockage des photos de tickets (capture/illustration) / Ticket photo storage
 TICKET_PHOTOS_DIR = Path("data/photos/tickets")
@@ -207,7 +231,7 @@ async def list_tickets(
     status: TicketStatus | None = Query(None),
     ticket_type: TicketType | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "read")),
 ):
     """Lister TOUS les tickets (transparent) avec nb d'échanges / List all tickets."""
     count_sq = (
@@ -245,7 +269,7 @@ async def list_tickets(
 async def get_ticket(
     ticket_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "read")),
 ):
     """Détail d'un ticket + tous les échanges (visible par tous) / Ticket detail."""
     result = await db.execute(
@@ -263,7 +287,7 @@ async def get_ticket(
 async def export_ticket(
     ticket_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "read")),
 ):
     """Exporter un ticket en archive ZIP auto-suffisante pour Claude Code.
 
@@ -310,7 +334,7 @@ async def export_ticket(
 async def create_ticket(
     data: TicketCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "create")),
 ):
     """Créer un ticket (avec contexte capturé) / Create a ticket with captured context."""
     ticket = Ticket(
@@ -346,12 +370,13 @@ async def upload_ticket_photo(
     ticket_id: int,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "create")),
 ):
     """Joindre une photo / capture d'écran à un ticket (illustre le problème).
 
-    Ouvert à tout utilisateur authentifié, comme la création de ticket et les
-    échanges (board transparent). Image uniquement, 5 Mo max, 5 photos max.
+    Même permission que l'ouverture d'un ticket et que les échanges
+    (`tickets:create`) : illustrer, c'est contribuer au fil. Image uniquement,
+    5 Mo max, 5 photos max.
     """
     ticket = await db.get(Ticket, ticket_id)
     if not ticket:
@@ -405,7 +430,7 @@ async def delete_ticket_photo(
     ticket_id: int,
     photo_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "read")),
 ):
     """Retirer une photo d'un ticket (ticket #82).
 
@@ -453,7 +478,7 @@ async def download_ticket_photo(
     ticket_id: int,
     photo_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "read")),
 ):
     """Télécharger / afficher une photo de ticket / Download a ticket photo."""
     photo = await db.get(TicketPhoto, photo_id)
@@ -473,7 +498,7 @@ async def add_comment(
     ticket_id: int,
     data: TicketCommentCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "create")),
 ):
     """Ajouter un échange (visible par tous) / Add an exchange (visible to all)."""
     ticket = await db.get(Ticket, ticket_id)
@@ -496,7 +521,7 @@ async def update_ticket(
     ticket_id: int,
     data: TicketUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "read")),
 ):
     """Modifier son propre ticket (titre, description, type, priorité).
 
@@ -541,12 +566,12 @@ async def update_ticket(
 async def delete_ticket(
     ticket_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("tickets", "read")),
 ):
     """Supprimer son propre ticket / Delete own ticket.
 
-    Autorisé à l'AUTEUR du ticket ou à un admin (tickets:update). La suppression
-    entraîne en cascade celle des échanges et des photos (relation ORM). Les
+    Autorisé à l'AUTEUR du ticket ou à un rôle portant `tickets:delete`. La
+    suppression entraîne en cascade celle des échanges et des photos (relation ORM). Les
     fichiers image sur disque sont retirés au passage (best-effort)."""
     ticket = await db.execute(
         select(Ticket).where(Ticket.id == ticket_id).options(selectinload(Ticket.photos))
@@ -554,7 +579,7 @@ async def delete_ticket(
     ticket = ticket.scalar_one_or_none()
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    if not _can_edit_ticket(user, ticket):
+    if not _can_delete_ticket(user, ticket):
         raise HTTPException(status_code=403, detail="Seul l'auteur ou un administrateur peut supprimer ce ticket")
 
     # Retirer les fichiers image du disque avant la suppression ORM (best-effort) /

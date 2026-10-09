@@ -57,8 +57,15 @@ export default function Tickets() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const user = useAuthStore((s) => s.user)
   const canManage = hasPermission('tickets', 'update')
+  /* Contribuer au board (ouvrir, repondre, joindre) : tickets:create (#102).
+     Un role peut n'avoir que la lecture — il consulte le fil sans l'alimenter. /
+     Contributing needs tickets:create; a read-only role just follows the thread. */
+  const canContribute = hasPermission('tickets', 'create')
+  const canDeleteAny = hasPermission('tickets', 'delete')
+  const isAuthor = !!selected && !!user && selected.created_by_user_id === user.id
   /* L'auteur (ou un admin) peut modifier/supprimer son ticket (ticket #19) */
-  const canEdit = !!selected && (canManage || (!!user && selected.created_by_user_id === user.id))
+  const canEdit = !!selected && (canManage || isAuthor)
+  const canDelete = !!selected && (canDeleteAny || isAuthor)
 
   const loadList = useCallback(async () => {
     setLoading(true)
@@ -275,11 +282,13 @@ export default function Tickets() {
               </span>
             ))}
           </div>
-          <button onClick={() => setCreating(true)}
-            className="px-3 py-2 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90"
-            style={{ backgroundColor: 'var(--color-primary)' }}>
-            + Nouveau ticket
-          </button>
+          {canContribute && (
+            <button onClick={() => setCreating(true)}
+              className="px-3 py-2 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90"
+              style={{ backgroundColor: 'var(--color-primary)' }}>
+              + Nouveau ticket
+            </button>
+          )}
         </div>
       </div>
 
@@ -351,12 +360,14 @@ export default function Tickets() {
                         style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-primary)' }}>
                         ✏ Modifier
                       </button>
+                      {canDelete && (
                       <button onClick={deleteTicket} disabled={busy}
                         title="Supprimer ce ticket (auteur ou administrateur)"
                         className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-lg border transition-all hover:opacity-80 disabled:opacity-50"
                         style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)', backgroundColor: 'var(--bg-primary)' }}>
                         🗑 Supprimer
                       </button>
+                      )}
                     </>
                   )}
                   <button onClick={exportTicket} disabled={exporting}
@@ -405,7 +416,7 @@ export default function Tickets() {
               <div className="mb-4">
                 <div className="flex items-center justify-between mb-1.5">
                   <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Photos</h4>
-                  {(selected.photos?.length ?? 0) < 5 && (
+                  {canContribute && (selected.photos?.length ?? 0) < 5 && (
                     <label className="text-xs cursor-pointer inline-flex items-center gap-1 px-2 py-1 rounded-lg border transition-all hover:opacity-80"
                       style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-primary)' }}
                       title="Ajouter depuis un fichier, ou collez une capture avec Ctrl+V">
@@ -515,7 +526,8 @@ export default function Tickets() {
                 ))}
               </div>
 
-              {/* Ajouter un échange */}
+              {/* Ajouter un échange — réservé à tickets:create (#102) */}
+              {canContribute && (
               <div className="flex gap-2">
                 <input value={newComment} onChange={(e) => setNewComment(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addComment()}
@@ -526,6 +538,7 @@ export default function Tickets() {
                   Envoyer
                 </button>
               </div>
+              )}
             </div>
           </div>
         </div>

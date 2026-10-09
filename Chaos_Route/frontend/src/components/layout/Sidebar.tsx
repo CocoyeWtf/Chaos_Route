@@ -30,9 +30,11 @@ interface NavGroup {
 
 const navGroups: NavGroup[] = [
   { key: 'dashboard', label: 'nav.dashboard', icon: '📊', path: '/', resource: 'dashboard' },
-  // Board de tickets transparent — visible par tous (pas de resource) /
-  // Transparent ticket board — visible to everyone (no resource gate)
-  { key: 'tickets', label: 'Tickets', icon: '🎫', path: '/tickets' },
+  // Board de tickets : transparent entre ceux qui l'ont, mais plus visible de
+  // tous (#102). La ressource `tickets` se coche par rôle — un compte PDV n'a
+  // plus l'entrée, ni les compteurs. / Gated on the `tickets` resource since
+  // #102; PDV accounts no longer see the entry.
+  { key: 'tickets', label: 'Tickets', icon: '🎫', path: '/tickets', resource: 'tickets' },
   {
     key: 'database',
     label: 'nav.database',
@@ -234,6 +236,10 @@ export function Sidebar({ forceCollapsed = false }: SidebarProps) {
      traités (vert). / Ticket counts in the menu: open (orange) + done (green). */
   const [doneTickets, setDoneTickets] = useState(0)
   const [openTickets, setOpenTickets] = useState(0)
+  /* Sans `tickets:read`, le board est fermé (#102) : inutile d'aller chercher
+     des compteurs qu'on n'affichera pas et que le serveur refuserait. /
+     No point fetching counts the server would refuse. */
+  const canReadTickets = hasPermission('tickets', 'read')
   const fetchTicketCounts = () => {
     api.get<{ status: string }[]>('/tickets/')
       .then(({ data }) => {
@@ -243,8 +249,10 @@ export function Sidebar({ forceCollapsed = false }: SidebarProps) {
       })
       .catch(() => { /* non-bloquant */ })
   }
-  useEffect(() => { fetchTicketCounts() }, [])
-  useEffect(() => { if (location.pathname === '/tickets') fetchTicketCounts() }, [location.pathname])
+  useEffect(() => { if (canReadTickets) fetchTicketCounts() }, [canReadTickets])
+  useEffect(() => {
+    if (canReadTickets && location.pathname === '/tickets') fetchTicketCounts()
+  }, [location.pathname, canReadTickets])
 
   /* Popover pour groupes en mode collapsed / Popover for groups in collapsed mode */
   const [popoverGroup, setPopoverGroup] = useState<string | null>(null)

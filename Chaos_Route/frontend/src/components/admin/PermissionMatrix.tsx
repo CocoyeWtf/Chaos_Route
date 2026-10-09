@@ -103,6 +103,16 @@ const RESOURCE_GROUPS: ResourceGroup[] = [
     ],
   },
   {
+    /* Board de tickets (#102). Il n'etait gate par rien : un compte PDV voyait
+       les tickets de l'exploitation et pouvait en ouvrir. Les quatre actions
+       sont separees — « Lire » suffit a donner le board, « Modif. » donne le
+       changement de statut. / The board had no gate at all. */
+    key: 'support', label: 'Support', icon: '🎫',
+    resources: [
+      { resource: 'tickets', label: 'Board de tickets' },
+    ],
+  },
+  {
     key: 'admin', label: 'Administration', icon: '⚙️',
     resources: [
       { resource: 'users', label: 'Utilisateurs' },

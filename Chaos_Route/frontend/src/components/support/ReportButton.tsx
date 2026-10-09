@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAuthStore } from '../../stores/useAuthStore'
 import { CreateTicketModal } from './CreateTicketModal'
 import {
   recordUserNote, startRecording, stopRecording, clearSession,
@@ -27,6 +28,7 @@ function mmss(totalSec: number): string {
 
 export function ReportButton() {
   const navigate = useNavigate()
+  const hasPermission = useAuthStore((s) => s.hasPermission)
   const [open, setOpen] = useState(false)
   const [recording, setRecording] = useState(isRecording())
   const [panelOpen, setPanelOpen] = useState(false)
@@ -52,6 +54,12 @@ export function ReportButton() {
     if (n) { recordUserNote(n); setSavedNote(true); setTimeout(() => setSavedNote(false), 1400) }
     setNote('')
   }
+
+  /* Sans le droit d'ouvrir un ticket (#102), ces contrôles n'ont pas de
+     raison d'être dans la barre : la modale finirait sur un 403. Le hook
+     reste appelé avant ce retour, l'ordre des hooks est donc stable. /
+     Hidden without tickets:create — the modal would end on a 403. */
+  if (!hasPermission('tickets', 'create')) return null
 
   return (
     <>

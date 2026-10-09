@@ -1276,6 +1276,33 @@ async def list_tour_pickups(
 _PICKUP_LABEL_CODE_RE = re.compile(r"^RET-[A-Za-z0-9]+-[A-Za-z0-9]+-\d{8}-\d{3}$")
 
 
+def _normalise_label_code(label_code: str) -> str:
+    """Forme canonique d'un code d'étiquette scanné (#103).
+
+    Les étiquettes émises jusqu'au 2026-10-09 portent une espace héritée du
+    code support (« RET-01717-PA 22020-20261010-002 ») : le contrôle de format
+    les refusait toutes — 184 sur 185 en production — et elles circulent déjà,
+    imprimées. La comparaison se fait donc sur une forme normalisée (espaces
+    retirés, majuscules), qui accepte aussi bien l'ancien papier que le
+    nouveau. / Labels printed before 2026-10-09 carry a space; compare on a
+    normalised form so old paper still scans.
+    """
+    return (label_code or "").strip().replace(" ", "").upper()
+
+
+def _label_code_clause(label_code: str):
+    """Clause SQL de correspondance tolérante / Tolerant match clause.
+
+    Exact d'abord — c'est le cas courant et il passe par l'index unique —
+    sinon comparaison normalisée des deux côtés. / Exact first, then normalised.
+    """
+    return or_(
+        PickupLabel.label_code == label_code,
+        func.upper(func.replace(PickupLabel.label_code, " ", ""))
+        == _normalise_label_code(label_code),
+    )
+
+
 def _pdv_codes_match(scanned: str | None, actual: str) -> bool:
     """Comparaison tolérante entre le code PDV scanné et le code réel du PDV de l'étiquette.
 
@@ -1311,13 +1338,14 @@ async def scan_pickup_label_arrival(
     """
     _check_device_feature(device, "pickups")
 
-    # Validation format / Format validation
-    if not _PICKUP_LABEL_CODE_RE.match(label_code):
+    # Validation format, sur la forme normalisée (#103) / Format validation
+    if not _PICKUP_LABEL_CODE_RE.match(_normalise_label_code(label_code)):
         raise HTTPException(status_code=400, detail="Format de code etiquette invalide")
 
     result = await db.execute(
         select(PickupLabel)
-        .where(PickupLabel.label_code == label_code)
+        .where(_label_code_clause(label_code))
+        .limit(1)
         .options(
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.support_type),
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.pdv),
@@ -1414,7 +1442,8 @@ async def scan_pickup_label(
     """
     result = await db.execute(
         select(PickupLabel)
-        .where(PickupLabel.label_code == label_code)
+        .where(_label_code_clause(label_code))
+        .limit(1)
         .options(
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.labels),
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.support_type),
@@ -1611,7 +1640,8 @@ async def standalone_pickup_scan(
     _check_device_feature(device, "pickups")
     result = await db.execute(
         select(PickupLabel)
-        .where(PickupLabel.label_code == label_code)
+        .where(_label_code_clause(label_code))
+        .limit(1)
         .options(
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.labels),
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.support_type),
@@ -1744,7 +1774,8 @@ async def base_receive_scan(
     _check_device_feature(device, "base_reception")
     result = await db.execute(
         select(PickupLabel)
-        .where(PickupLabel.label_code == label_code)
+        .where(_label_code_clause(label_code))
+        .limit(1)
         .options(selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.labels))
     )
     label = result.scalar_one_or_none()
@@ -2334,12 +2365,13 @@ async def close_combi_pickup(
     """
     _check_device_feature(device, "pickups")
 
-    if not _PICKUP_LABEL_CODE_RE.match(label_code):
+    if not _PICKUP_LABEL_CODE_RE.match(_normalise_label_code(label_code)):
         raise HTTPException(status_code=400, detail="Format de code etiquette invalide")
 
     result = await db.execute(
         select(PickupLabel)
-        .where(PickupLabel.label_code == label_code)
+        .where(_label_code_clause(label_code))
+        .limit(1)
         .options(
             selectinload(PickupLabel.pickup_request).selectinload(PickupRequest.support_type),
             selectinload(PickupLabel.combi_scans),

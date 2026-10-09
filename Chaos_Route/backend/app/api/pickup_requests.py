@@ -97,12 +97,30 @@ def _create_movement(label: PickupLabel, movement_type: MovementType, device_id:
     )
 
 
+def _normalize_code_part(value: str) -> str:
+    """Ne garder que lettres et chiffres dans un segment de code (#103).
+
+    Les codes support portent une espace (« PA 22020 »), qui se retrouvait dans
+    le code d'étiquette — donc dans un identifiant scanné, imprimé et passé en
+    URL. Le contrôle de format côté chauffeur, lui, n'accepte que des lettres
+    et des chiffres : 184 étiquettes sur 185 étaient refusées au scan avec
+    « Format de code etiquette invalide ». Un identifiant machine n'a pas à
+    porter d'espace. / Support codes carry a space that made the scanned
+    identifier fail validation.
+    """
+    return "".join(c for c in (value or "") if c.isalnum())
+
+
 def _generate_label_code(pdv_code: str, support_code: str, date_str: str, seq: int) -> str:
     """Générer le code étiquette / Generate label code.
     Format : RET-{PDV_CODE}-{SUPPORT_CODE}-{YYYYMMDD}-{SEQ:03d}
+    Les segments variables sont normalisés (lettres et chiffres seulement, #103).
     """
     date_compact = date_str.replace("-", "")
-    return f"RET-{pdv_code}-{support_code}-{date_compact}-{seq:03d}"
+    return (
+        f"RET-{_normalize_code_part(pdv_code)}-{_normalize_code_part(support_code)}"
+        f"-{date_compact}-{seq:03d}"
+    )
 
 
 async def _pickup_form_data(db: AsyncSession, scope_pdv_id: int | None) -> dict:

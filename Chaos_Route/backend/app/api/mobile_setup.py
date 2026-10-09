@@ -51,8 +51,8 @@ def _apk_sha256(apk_path: Path) -> str | None:
 # Mettre a jour a chaque build APK / Update on each APK build
 # IMPORTANT : build_number doit etre STRICTEMENT SUPERIEUR a celui dans l'APK sur le serveur
 # pour declencher la mise a jour. Egal ou inferieur = pas de mise a jour.
-APP_VERSION = "1.9.4"
-APP_BUILD_NUMBER = 15
+APP_VERSION = "1.9.5"
+APP_BUILD_NUMBER = 16
 # ORDRE DES OPERATIONS a chaque publication d'un build :
 #   1. eas build -p android --profile preview
 #      (profil « preview » = buildType apk dans eas.json ; « production »
@@ -64,6 +64,12 @@ APP_BUILD_NUMBER = 15
 # annonce.
 # Build 15 publie le 2026-09-22 (EAS e5035e58, commit c6b26da, keystore
 # « Build Credentials MxqVu8k0LC » reutilise -> mise a jour sur place).
+# Build 16 publie le 2026-10-09 (EAS 8c683148, commit 2be3fc2, MEME keystore
+# « Build Credentials MxqVu8k0LC » -> mise a jour sur place, sans
+# desinstallation ni reparametrage). Il porte les tickets #86 (impression
+# Bluetooth des retours PDV) et #98 (affectation par scan, interface PDV qui
+# tient a l'expiration de session). APK depose AVANT ce bump, conformement a
+# l'ordre ci-dessus.
 #
 # A partir du build 15, le nom de version est incremente a chaque build (11 a 14
 # partageaient « 1.9.3 », ce qui rendait toute mise a jour invisible) et l'app
@@ -71,16 +77,20 @@ APP_BUILD_NUMBER = 15
 # Release order: build, upload the APK, THEN bump these constants.
 
 # Coupe-circuit auto-update / Auto-update kill switch.
-# Laisse actif pour le build 15 (1.9.4) : arbitrage du 22/09/2026, on est en
-# phase de test, la bascule immediate de tout le parc est sans consequence. Pour
-# un deploiement global, la consigne est l'inverse — deployer d'abord a False,
-# valider sur UNE tablette, puis repasser a True.
+# Build 16 : deploye a False, volontairement. C'est la consigne pour un
+# deploiement global — le parc tourne desormais pour de vrai, on ne bascule plus
+# tout le monde d'un coup. Sequence : APK depose et annonce (1.9.5 / 16), parc
+# FIGE sur son build actuel tant que ce drapeau est False, installation manuelle
+# sur UNE tablette via /app/setup/<code> ou le lien de telechargement,
+# verification, puis repassage a True pour propager.
+# (Build 15 avait ete bascule directement a True : arbitrage du 22/09/2026,
+# « phase de test donc pas d'impact ». Ce n'est plus le cas.)
 # INVARIANT ANTI-BRICKING : APP_BUILD_NUMBER ci-dessus DOIT correspondre a l'APK
 # reellement servi a apk/cmro-driver.apk sur le serveur. Ne passer a True
 # qu'APRES avoir depose l'APK, sinon les tablettes sont forcees vers un APK qui
 # n'est pas celui annonce.
 # Emergency kill switch: keep False until the announced APK is actually served.
-FORCE_UPDATE = True
+FORCE_UPDATE = False
 
 
 @router.get("/app/version")

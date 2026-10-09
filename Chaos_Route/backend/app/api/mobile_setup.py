@@ -77,12 +77,13 @@ APP_BUILD_NUMBER = 16
 # Release order: build, upload the APK, THEN bump these constants.
 
 # Coupe-circuit auto-update / Auto-update kill switch.
-# Build 16 : deploye a False, volontairement. C'est la consigne pour un
-# deploiement global — le parc tourne desormais pour de vrai, on ne bascule plus
-# tout le monde d'un coup. Sequence : APK depose et annonce (1.9.5 / 16), parc
-# FIGE sur son build actuel tant que ce drapeau est False, installation manuelle
-# sur UNE tablette via /app/setup/<code> ou le lien de telechargement,
-# verification, puis repassage a True pour propager.
+# Build 16 : repasse a True le 2026-10-09 sur feu vert explicite, apres que
+# l'APK a ete depose, son empreinte verifiee des deux cotes et l'annonce
+# (1.9.5 / 16) deployee. Tout le parc se met a jour a la prochaine ouverture.
+# Pour desarmer : remettre False, les tablettes gardent alors leur version
+# installee. Attention, un VRAI rollback demande un versionCode SUPERIEUR
+# contenant l'ancien code — Android refuse d'installer un versionCode inferieur
+# (cf. RUNBOOK_MISE_A_JOUR_MOBILE, section 5).
 # (Build 15 avait ete bascule directement a True : arbitrage du 22/09/2026,
 # « phase de test donc pas d'impact ». Ce n'est plus le cas.)
 # INVARIANT ANTI-BRICKING : APP_BUILD_NUMBER ci-dessus DOIT correspondre a l'APK
@@ -90,7 +91,7 @@ APP_BUILD_NUMBER = 16
 # qu'APRES avoir depose l'APK, sinon les tablettes sont forcees vers un APK qui
 # n'est pas celui annonce.
 # Emergency kill switch: keep False until the announced APK is actually served.
-FORCE_UPDATE = False
+FORCE_UPDATE = True
 
 
 @router.get("/app/version")

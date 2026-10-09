@@ -72,6 +72,15 @@ async def export_wms_infolog(
     A = ordre ERT (priorité) · B = code PDV · C = code chauffeur Infolog ·
     D = code transporteur · E = date de livraison · F = heure de départ ·
     G = index global (décroissant par tour) · H = heure de départ (texte).
+
+    Colonne I = code de la tournée CMRO (#104). Elle est AJOUTÉE EN FIN de ligne
+    pour ne rien déplacer de ce que lit la macro d'encodage, et elle n'existe
+    que pour le retour : quand Infolog a attribué ses numéros, il faut pouvoir
+    recoller chaque numéro à la bonne tournée. Sans elle le fichier ne contient
+    aucun identifiant CMRO, et le rapprochement reposerait sur l'ordre des
+    lignes — c'est-à-dire sur rien. /
+    Column I carries the CMRO tour code, appended so the macro's columns do not
+    move; it exists so the Infolog numbers can be matched back.
     """
     # ── Code transporteur (paramètre global configurable) ────────────────────
     carrier_param = await db.execute(
@@ -172,6 +181,7 @@ async def export_wms_infolog(
                 dep_text,                           # F
                 idx,                                # G
                 dep_text,                           # H
+                tour.code,                          # I — identifiant CMRO (#104)
             ])
             # Format JJ-MM-AA sur la date de livraison (#34) / DD-MM-YY on the date
             if isinstance(delivery_date_val, date_type):
@@ -344,6 +354,13 @@ _PLANNING_HEADERS = (
     + ["H.Départ", "Porte", "T°", "H. disp. Semi", "Eqc Prévis.", "EQC Chargés",
        "Top Départ", "Prés. sur site", "H.Sortie", "H.Retour", "Kms départ",
        "Kms retour", "KM calculé", "Remarque Garde"]
+    # Deux colonnes ajoutées pour le retour des numéros Infolog (#104).
+    # « Code CMRO » est l'identifiant technique : il ne doit PAS être modifié,
+    # c'est lui qui permet de recoller la ligne à sa tournée au réimport — la
+    # colonne « N° Mission » ne le peut pas, puisqu'elle est justement celle
+    # qu'on écrase avec le numéro Infolog. /
+    # Two columns added for the Infolog round trip; "Code CMRO" is the key.
+    + ["Code CMRO", "N° Infolog"]
 )
 # Index 1-based de la 1re colonne PDV (N) et de la 1re colonne d'exploitation (AT)
 _PLANNING_PDV_COL0 = 14
@@ -498,6 +515,10 @@ async def export_postier_planning(
         ws.cell(r, c + 11, tour.km_return)                      # BE Kms retour
         ws.cell(r, c + 12, _eqc(tour.total_km))                # BF KM calculé
         # BG Remarque Garde — laissé vide
+        # Retour des numéros Infolog (#104) : identifiant technique, puis la
+        # colonne à remplir par le trafic. / Infolog round trip.
+        ws.cell(r, c + 14, tour.code)
+        ws.cell(r, c + 15, tour.wms_tour_code or "")
         r += 1
 
     content = io.BytesIO()

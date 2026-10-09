@@ -1,5 +1,6 @@
 """Routes Import CSV/Excel / Import API routes."""
 
+import io
 from datetime import time as dt_time
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
@@ -422,6 +423,214 @@ async def import_time_matrix(
         "skipped": skipped,
         "errors": errors[:20],
         "message": f"{created} created, {updated} updated, {skipped} skipped",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Retour des numéros de tournée Infolog (#104)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Le numéro de tournée CMRO n'est pas exploitable par Infolog : c'est Infolog
+# qui attribue le sien, après encodage. Jusqu'ici ce numéro restait dans le WMS
+# et dans un fichier Excel partagé, donc CMRO ne savait pas, pour une tournée
+# donnée, sous quel numéro elle existait en aval — et la traçabilité s'arrêtait
+# au milieu de la chaîne. Le champ `Tour.wms_tour_code` existait déjà (il
+# alimente l'ERT, le n° mission et l'extraction de facturation) mais n'était
+# renseigné qu'au coup par coup, à l'import du manifeste d'UNE tournée, bien
+# plus tard dans le processus.
+#
+# Cet import ferme la boucle, et accepte les DEUX circuits décrits au ticket
+# sans imposer d'arbitrage :
+#   - le fichier WMS (TMS_vers_wms) que la macro peut compléter avec le numéro
+#     attribué, une ligne par PDV ;
+#   - le fichier ERT (Tournées ERT) que le trafic remplit à la main, une ligne
+#     par tournée.
+# Les deux portent désormais le code CMRO en colonne technique : c'est lui qui
+# permet de recoller un numéro à sa tournée. / Closes the CMRO → Infolog → CMRO
+# loop, accepting either file.
+
+_ERT_HEADER_ROW = 6          # ligne des en-têtes dans l'export ERT
+_ERT_FIRST_DATA_ROW = 7
+_WMS_CMRO_COL = 9            # colonne I de l'export WMS (1-based)
+
+
+def _clean_cell(value) -> str:
+    """Valeur de cellule en texte propre / Cell value as clean text.
+
+    Excel rend volontiers un numéro saisi à la main comme un flottant
+    (« 291186.0 ») : on le ramène à l'entier, sinon le numéro stocké ne
+    correspondrait à rien. / Excel renders typed numbers as floats.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def _lire_numeros_ert(ws) -> tuple[list[tuple[str, str]], list[str]]:
+    """Lire (code CMRO, numéro Infolog) depuis la feuille ERT / Read ERT pairs.
+
+    Tolérant sur l'habitude du trafic : le numéro est pris dans la colonne
+    « N° Infolog » si elle est remplie, sinon dans « N° Mission » lorsque
+    celle-ci a été écrasée — c'est la colonne que l'œil cherche en premier, et
+    la consigne actuelle est justement d'y recopier le numéro. /
+    Falls back to the "N° Mission" column when it has been overwritten.
+    """
+    entetes = {}
+    for col in range(1, ws.max_column + 1):
+        libelle = _clean_cell(ws.cell(_ERT_HEADER_ROW, col).value)
+        if libelle:
+            entetes[libelle.lower()] = col
+    col_cmro = entetes.get("code cmro")
+    col_infolog = entetes.get("n° infolog") or entetes.get("n infolog")
+    col_mission = entetes.get("n° mission") or entetes.get("n mission")
+    if not col_cmro:
+        raise HTTPException(
+            status_code=400,
+            detail="Colonne « Code CMRO » absente : réexportez les tournées ERT "
+                   "depuis l'ordonnancement, le fichier doit venir de CMRO.",
+        )
+
+    paires: list[tuple[str, str]] = []
+    ignorees: list[str] = []
+    for ligne in range(_ERT_FIRST_DATA_ROW, ws.max_row + 1):
+        code = _clean_cell(ws.cell(ligne, col_cmro).value)
+        if not code:
+            continue
+        numero = _clean_cell(ws.cell(ligne, col_infolog).value) if col_infolog else ""
+        if not numero and col_mission:
+            mission = _clean_cell(ws.cell(ligne, col_mission).value)
+            if mission and mission != code:
+                numero = mission
+        if numero:
+            paires.append((code, numero))
+        else:
+            ignorees.append(code)
+    return paires, ignorees
+
+
+def _lire_numeros_wms(ws) -> tuple[list[tuple[str, str]], list[str]]:
+    """Lire (code CMRO, numéro Infolog) depuis la feuille WMS / Read WMS pairs.
+
+    Une ligne par PDV : le numéro attribué est le même sur toutes les lignes
+    d'une tournée, on retient la première valeur rencontrée. Le numéro est
+    cherché dans la première colonne APRÈS le code CMRO qui porte une valeur —
+    on ne sait pas où la macro l'écrira exactement, et imposer une colonne
+    serait une contrainte de plus sur un fichier qu'on ne maîtrise pas. /
+    One row per PDV; the number is looked up in the first filled column after
+    the CMRO code, since the macro's exact column is not ours to dictate.
+    """
+    paires: dict[str, str] = {}
+    sans_numero: set[str] = set()
+    for ligne in range(1, ws.max_row + 1):
+        code = _clean_cell(ws.cell(ligne, _WMS_CMRO_COL).value)
+        if not code:
+            continue
+        numero = ""
+        for col in range(_WMS_CMRO_COL + 1, ws.max_column + 1):
+            valeur = _clean_cell(ws.cell(ligne, col).value)
+            if valeur:
+                numero = valeur
+                break
+        if numero and code not in paires:
+            paires[code] = numero
+        elif not numero:
+            sans_numero.add(code)
+    return list(paires.items()), sorted(sans_numero - set(paires))
+
+
+@router.post("/tour-numbers")
+async def import_tour_numbers(
+    file: UploadFile = File(...),
+    date: str | None = Query(None, description="Restreindre au jour de planification AAAA-MM-JJ"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("imports-exports", "create")),
+):
+    """Remonter les numéros de tournée Infolog dans CMRO (#104).
+
+    Accepte indifféremment le fichier WMS (TMS_vers_wms, une ligne par PDV) et
+    le fichier ERT (Tournées ERT, une ligne par tournée) : les deux portent le
+    code CMRO depuis cette version, et le format est reconnu tout seul.
+
+    Ne touche QUE `wms_tour_code`. Le code CMRO reste la clé technique de la
+    tournée — il est imprimé sur les feuilles de route, encodé dans le QR
+    d'affectation (#98) et référencé par les étiquettes : l'écraser casserait
+    ce qui est déjà en circulation. Le numéro Infolog s'affiche partout où il
+    compte (ERT, n° mission, extraction de facturation) dès qu'il est connu. /
+    Only sets wms_tour_code; the CMRO code stays the technical key.
+    """
+    # Pas de garde anti-orphelins ici, contrairement aux autres imports : cet
+    # endpoint ne CREE rien. Il met a jour un champ de tournees qui existent
+    # deja et portent deja leur societe ; le filtre tenant s'applique a la
+    # requete comme partout ailleurs. Refuser un superadmin l'empecherait de
+    # rendre service sans rien proteger. / Nothing is created here, so the
+    # anti-orphan guard would block without protecting anything.
+
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="Fichier .xlsx ou .xlsm attendu")
+
+    contenu = await file.read()
+
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(io.BytesIO(contenu), data_only=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Fichier Excel illisible : {e}")
+
+    ws = wb["Tours"] if "Tours" in wb.sheetnames else wb[wb.sheetnames[0]]
+    est_ert = _clean_cell(ws.cell(_ERT_HEADER_ROW, 1).value).lower() == "ordre"
+    if est_ert:
+        paires, sans_numero = _lire_numeros_ert(ws)
+        format_lu = "ERT"
+    else:
+        paires, sans_numero = _lire_numeros_wms(ws)
+        format_lu = "WMS"
+
+    if not paires and not sans_numero:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucune tournée reconnue dans ce fichier. Il doit provenir d'un "
+                   "export CMRO (WMS Infolog ou Tournées ERT) postérieur au 09/10/2026.",
+        )
+
+    requete = select(Tour).where(Tour.code.in_([c for c, _ in paires]))
+    if date:
+        requete = requete.where(Tour.date == date)
+    tours = {t.code: t for t in (await db.execute(requete)).scalars().all()}
+
+    mis_a_jour: list[dict] = []
+    inchanges = 0
+    introuvables: list[str] = []
+    for code, numero in paires:
+        tour = tours.get(code)
+        if tour is None:
+            introuvables.append(code)
+            continue
+        if (tour.wms_tour_code or "") == numero:
+            inchanges += 1
+            continue
+        mis_a_jour.append({
+            "tour_code": code,
+            "ancien": tour.wms_tour_code or None,
+            "numero_infolog": numero,
+        })
+        tour.wms_tour_code = numero
+
+    await db.flush()
+
+    return {
+        "format": format_lu,
+        "updated": len(mis_a_jour),
+        "unchanged": inchanges,
+        "without_number": len(sans_numero),
+        "not_found": introuvables[:20],
+        "details": mis_a_jour[:50],
+        "message": (
+            f"{len(mis_a_jour)} tournee(s) mise(s) a jour, {inchanges} deja a jour, "
+            f"{len(sans_numero)} sans numero, {len(introuvables)} introuvable(s)."
+        ),
     }
 
 

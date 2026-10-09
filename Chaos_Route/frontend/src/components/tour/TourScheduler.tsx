@@ -174,6 +174,9 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   const [recalculating, setRecalculating] = useState(false)
   const [exportingWms, setExportingWms] = useState(false)
   const [exportingPlanning, setExportingPlanning] = useState(false)
+  /* Retour des numéros de tournée Infolog (#104) */
+  const [importingNumbers, setImportingNumbers] = useState(false)
+  const numbersInputRef = useRef<HTMLInputElement>(null)
   const [costTourId, setCostTourId] = useState<number | null>(null)
   const [showPrintPlan, setShowPrintPlan] = useState(false)
   /* Modale mail de confirmation transporteur / Carrier confirmation email modal */
@@ -1002,6 +1005,43 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     }
   }
 
+  /* Import des numéros de tournée attribués par Infolog (#104).
+
+     Le numéro CMRO ne parle pas à Infolog : c'est Infolog qui attribue le sien
+     à l'encodage. Tant qu'il ne revenait pas, la traçabilité s'arrêtait au
+     milieu de la chaîne — personne dans CMRO ne savait sous quel numéro une
+     tournée existait en aval. On accepte indifféremment le fichier WMS
+     complété par la macro et le fichier ERT rempli à la main : le serveur
+     reconnaît le format, l'exploitant n'a rien à déclarer. /
+     Infolog assigns its own tour number; this brings it back into CMRO. */
+  const handleImportNumbers = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !selectedDate) return
+    setImportingNumbers(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const { data } = await api.post('/imports/tour-numbers', fd, {
+        params: { date: selectedDate },
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      await loadData()
+      const introuvables = (data.not_found as string[] | undefined) ?? []
+      alert(
+        `Numéros Infolog importés (fichier ${data.format}).\n\n${data.message}`
+        + (introuvables.length
+          ? `\n\nTournées non retrouvées pour le ${selectedDate} :\n${introuvables.join(', ')}`
+          : ''),
+      )
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      alert(detail || "Échec de l'import des numéros Infolog.")
+    } finally {
+      setImportingNumbers(false)
+    }
+  }
+
   const updateInput = (
     tourId: number,
     field: 'time' | 'contractId' | 'deliveryDate' | 'mode' | 'vehicleId' | 'tractorId' | 'driverName' | 'priority' | 'returnBaseId' | 'finalPickupSupplierId',
@@ -1586,6 +1626,23 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 {exportingPlanning ? '...' : 'Export Excel'}
               </button>
+              <button
+                onClick={() => numbersInputRef.current?.click()}
+                disabled={importingNumbers}
+                className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80 disabled:opacity-40"
+                style={{ borderColor: '#a855f7', color: '#a855f7' }}
+                title="Importer les numéros de tournée attribués par Infolog — fichier WMS complété par la macro, ou Tournées ERT rempli à la main"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                {importingNumbers ? '...' : 'N° Infolog'}
+              </button>
+              <input
+                ref={numbersInputRef}
+                type="file"
+                accept=".xlsx,.xlsm"
+                className="hidden"
+                onChange={handleImportNumbers}
+              />
               {transportersForDate.length > 0 && (
                 <button
                   onClick={() => setShowConfirmMail(true)}

@@ -20,7 +20,9 @@ import pytest
 
 from app.api.pickup_requests import _generate_label_code, _normalize_code_part
 from app.utils.label_templates import (
-    LABEL_WIDTH_DOTS, QR_SIZE_DOTS, QR_X_DOTS, LabelData, render,
+    CODE_TEXT_CHAR_WIDTH_DOTS, CODE_TEXT_HEIGHT_DOTS, CODE_TEXT_Y_DOTS,
+    DOTS_PER_MM, LABEL_HEIGHT_DOTS, LABEL_WIDTH_DOTS, QR_SIZE_DOTS, QR_X_DOTS,
+    QR_Y_DOTS, LabelData, _centre, render,
 )
 
 
@@ -102,9 +104,26 @@ def test_le_code_en_clair_est_imprime_en_entier():
     Sur le papier incrimine, il s'arretait a « RET-01717-PA 22000-2 »."""
     code = "RET-01717-PA22020-20261010-002"
     zpl = render("ZPL", _data(code))
-    # Deux occurrences : la donnee du QR, et la ligne lisible centree
+    # Deux occurrences : la donnee du QR, et la ligne lisible
     assert zpl.count(code) == 2
-    assert "^FB%d,1,0,C" % LABEL_WIDTH_DOTS in zpl
+    # Centre par calcul, pas par ^FB : l'emulation des Brother RJ ne l'a pas
+    # rendu comme Zebra et le texte s'est imprime sur le QR (#103, reouvert).
+    assert "^FB" not in zpl
+    assert "^FO%d,%d" % (_centre(len(code), CODE_TEXT_CHAR_WIDTH_DOTS), CODE_TEXT_Y_DOTS) in zpl
+
+
+def test_le_code_en_clair_ne_chevauche_pas_le_qr():
+    """La regression exacte signalee par le terrain : le code imprime PAR-DESSUS
+    le symbole. La place reservee doit couvrir le pire cas de version QR."""
+    assert CODE_TEXT_Y_DOTS >= QR_Y_DOTS + QR_SIZE_DOTS + 20
+    assert CODE_TEXT_Y_DOTS + CODE_TEXT_HEIGHT_DOTS <= LABEL_HEIGHT_DOTS
+    # Et le code en clair doit tenir dans la largeur
+    assert 31 * CODE_TEXT_CHAR_WIDTH_DOTS <= LABEL_WIDTH_DOTS
+
+
+def test_le_qr_est_assez_grand_pour_etre_lu_de_loin():
+    """Samuel : « le QR a l'air petit ». 30 mm de cote minimum."""
+    assert QR_SIZE_DOTS / DOTS_PER_MM >= 30
 
 
 @pytest.mark.asyncio

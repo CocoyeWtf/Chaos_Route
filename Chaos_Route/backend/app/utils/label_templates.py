@@ -12,7 +12,7 @@ large alors que l'etiquette n'en offre que 576. Le code-barres sortait donc de
 l'etiquette a chaque impression — constate en production, bandes coupees et
 ligne lisible tronquee a « RET-01717-PA 22000-2 ». Baisser la densite pour le
 faire tenir l'aurait rendu illisible : c'est la forme du code qu'il fallait
-changer, pas son cadrage. Le meme code en QR tient dans 25 mm de cote, et
+changer, pas son cadrage. Le meme code en QR tient dans 37 mm de cote, et
 l'application chauffeur lit deja le QR partout ou elle scanne une etiquette
 (c'est aussi ce qu'imprime deja le poste de travail web).
 
@@ -43,25 +43,39 @@ DOTS_PER_MM = DPI / 25.4  # ~8 dots/mm
 LABEL_WIDTH_DOTS = int(LABEL_WIDTH_MM * DOTS_PER_MM)   # ~576
 LABEL_HEIGHT_DOTS = int(LABEL_HEIGHT_MM * DOTS_PER_MM)  # ~800
 
-# QR code (#103). Un code de 30-31 caracteres alphanumeriques tient dans un QR
-# version 3 (29x29 modules) avec correction M. A 7 dots par module : 203 dots,
-# soit 25 mm de cote — lisible par un appareil photo de telephone a 15-20 cm,
-# et tres loin de deborder des 576 dots de l'etiquette, ce que le code-barres
-# lineaire faisait systematiquement. /
-# A 30-char code fits a version-3 QR; at 7 dots per module that is 25 mm.
-QR_MODULES = 29
-QR_MAGNIFICATION = 7
-QR_SIZE_DOTS = QR_MODULES * QR_MAGNIFICATION            # 203
+# QR code (#103). Selon le mode d'encodage retenu par l'imprimante, un code de
+# 30-31 caracteres tient dans un QR version 2, 3 ou 4 — et c'est precisement le
+# piege : ON NE CHOISIT PAS la version, l'encodeur la deduit des donnees. La
+# premiere mouture reservait la place d'un version 3 (29 modules) et posait le
+# code en clair 10 dots en dessous ; sur le terrain le symbole est sorti plus
+# grand que prevu et le texte s'est imprime PAR-DESSUS le QR. On dimensionne
+# donc sur le pire cas raisonnable (version 4, 33 modules) et on laisse une
+# vraie respiration sous le symbole. /
+# The encoder picks the QR version, not us: reserve the worst case.
+QR_MODULES_MAX = 33          # version 4 — marge sur le pire cas
+QR_MAGNIFICATION = 9         # 33 x 9 = 297 dots, soit ~37 mm de cote
+QR_SIZE_DOTS = QR_MODULES_MAX * QR_MAGNIFICATION
 QR_X_DOTS = (LABEL_WIDTH_DOTS - QR_SIZE_DOTS) // 2      # centre horizontalement
-QR_Y_DOTS = 420
+QR_Y_DOTS = 372
+# Respiration sous le QR avant le code en clair / Breathing room below the QR
+QR_TEXT_GAP_DOTS = 22
+CODE_TEXT_Y_DOTS = QR_Y_DOTS + QR_SIZE_DOTS + QR_TEXT_GAP_DOTS
+# Police du code en clair : largeur fixee, pour centrer par calcul sans
+# dependre du bloc de texte ZPL (^FB) — que l'emulation ZPL des Brother RJ ne
+# traite visiblement pas comme Zebra. / Fixed width so we centre by hand.
+CODE_TEXT_HEIGHT_DOTS = 26
+CODE_TEXT_CHAR_WIDTH_DOTS = 17
 
 
-def _tspl_centre(nb_caracteres: int, largeur_police: int) -> int:
-    """Abscisse pour centrer un texte en TSPL / X offset to centre TSPL text.
+def _centre(nb_caracteres: int, largeur_police: int) -> int:
+    """Abscisse pour centrer un texte a la main / X offset to centre text.
 
-    TSPL n'a pas d'equivalent du bloc centre de ZPL : le centrage se calcule.
-    Jamais negatif, sinon l'imprimante ignore le champ. / No centred block in
-    TSPL; never return a negative offset or the field is dropped.
+    Vaut pour les deux protocoles : TSPL n'a pas de bloc centre, et le ^FB de
+    ZPL n'a pas donne le resultat attendu sur l'emulation des Brother RJ — le
+    code en clair s'est retrouve imprime par-dessus le QR. La position est donc
+    calculee, elle ne depend plus de l'interpretation de l'imprimante. Jamais
+    negative, sinon le champ est ignore. /
+    Compute the offset instead of trusting ^FB.
     """
     return max(0, (LABEL_WIDTH_DOTS - nb_caracteres * largeur_police) // 2)
 
@@ -106,7 +120,8 @@ def render_zpl(data: LabelData) -> str:
     - Quantite (ou "STOCK COMBI : X" si is_combi)
     - Date dispo
     - QR code (label_code), centre
-    - Footer : label_code en clair (centre, non tronque) + n/N
+    - Footer : label_code en clair, centre, SOUS le QR (le rang n/N figure deja
+      sur la ligne quantite)
     """
     pdv_code = _escape_zpl(data.pdv_code)
     pdv_name = _truncate(_escape_zpl(data.pdv_name), 28)
@@ -132,33 +147,30 @@ def render_zpl(data: LabelData) -> str:
         "^CI28"  # Encoding UTF-8
         "^LH0,0"
         # Code PDV (tres gros) / PDV code (very large)
-        f"^FO30,30^A0N,80,80^FD{pdv_code}^FS"
+        f"^FO30,24^A0N,80,80^FD{pdv_code}^FS"
         # Nom PDV / PDV name
-        f"^FO30,120^A0N,32,32^FD{pdv_name}^FS"
+        f"^FO30,110^A0N,32,32^FD{pdv_name}^FS"
         # Separateur / Separator
-        "^FO20,170^GB536,3,3^FS"
+        "^FO20,156^GB536,3,3^FS"
         # Type de reprise / Pickup type
-        f"^FO30,190^A0N,28,28^FD{pickup_type}^FS"
+        f"^FO30,172^A0N,28,28^FD{pickup_type}^FS"
         # Support / Support type
-        f"^FO30,230^A0N,40,40^FD{support}^FS"
-        # Quantite / Quantity
-        f"^FO30,290^A0N,40,40^FD{qty_line}^FS"
+        f"^FO30,208^A0N,40,40^FD{support}^FS"
+        # Quantite / Quantity — porte deja le rang n/N de l'etiquette
+        f"^FO30,262^A0N,40,40^FD{qty_line}^FS"
         # Date dispo / Availability date
-        f"^FO30,350^A0N,28,28^FDDispo: {data.availability_date}^FS"
+        f"^FO30,318^A0N,28,28^FDDispo: {data.availability_date}^FS"
         # Separateur / Separator
-        "^FO20,400^GB536,3,3^FS"
+        f"^FO20,{QR_Y_DOTS - 16}^GB536,3,3^FS"
         # QR code centre (#103) / Centred QR code
-        # ^BQN,2,<grossissement> : modele 2, 7 dots par module → ~25 mm de cote
-        # pour un code de 30 caracteres (version 3). ^FDMA, = correction M,
-        # saisie automatique. / Model 2, 7 dots per module.
+        # ^BQN,2,<grossissement> : modele 2, 9 dots par module. ^FDMA, =
+        # correction M, saisie automatique. / Model 2, 9 dots per module.
         f"^FO{QR_X_DOTS},{QR_Y_DOTS}^BQN,2,{QR_MAGNIFICATION}^FDMA,{label_code}^FS"
-        # Code en clair, centre sur toute la largeur : c'est le recours quand le
-        # QR est abime, il ne doit donc pas etre tronque lui non plus.
-        # ^FB = bloc de texte largeur etiquette, centre. /
-        # Human-readable fallback, centred across the full label width.
-        f"^FO0,{QR_Y_DOTS + QR_SIZE_DOTS + 10}^A0N,26,26^FB{LABEL_WIDTH_DOTS},1,0,C^FD{label_code}^FS"
-        # Numero de sequence en gros (pour combi : 1/1) / Sequence number large
-        f"^FO30,{QR_Y_DOTS + QR_SIZE_DOTS + 55}^A0N,30,30^FD{data.sequence_number}/{data.total_labels}^FS"
+        # Code en clair SOUS le QR, centre par calcul : c'est le recours quand
+        # le symbole est abime, il ne doit etre ni tronque ni superpose. /
+        # Human-readable fallback below the QR, centred by computation.
+        f"^FO{_centre(len(label_code), CODE_TEXT_CHAR_WIDTH_DOTS)},{CODE_TEXT_Y_DOTS}"
+        f"^A0N,{CODE_TEXT_HEIGHT_DOTS},{CODE_TEXT_CHAR_WIDTH_DOTS}^FD{label_code}^FS"
         "^XZ"
     )
     return zpl
@@ -195,30 +207,27 @@ def render_tspl(data: LabelData) -> str:
         "DIRECTION 1\r\n"
         "CLS\r\n"
         # Code PDV (font 5 = grand) / PDV code (font 5 = large)
-        f'TEXT 30,30,"5",0,2,2,"{pdv_code}"\r\n'
+        f'TEXT 30,24,"5",0,2,2,"{pdv_code}"\r\n'
         # Nom PDV / PDV name
-        f'TEXT 30,120,"3",0,1,1,"{pdv_name}"\r\n'
+        f'TEXT 30,110,"3",0,1,1,"{pdv_name}"\r\n'
         # Separateur / Separator
-        "BAR 20,170,536,3\r\n"
+        "BAR 20,156,536,3\r\n"
         # Type de reprise / Pickup type
-        f'TEXT 30,190,"3",0,1,1,"{pickup_type}"\r\n'
+        f'TEXT 30,172,"3",0,1,1,"{pickup_type}"\r\n'
         # Support / Support type
-        f'TEXT 30,230,"4",0,1,1,"{support}"\r\n'
-        # Quantite / Quantity
-        f'TEXT 30,290,"4",0,1,1,"{qty_line}"\r\n'
+        f'TEXT 30,208,"4",0,1,1,"{support}"\r\n'
+        # Quantite / Quantity — porte deja le rang n/N de l'etiquette
+        f'TEXT 30,262,"4",0,1,1,"{qty_line}"\r\n'
         # Date dispo / Availability date
-        f'TEXT 30,350,"3",0,1,1,"Dispo: {data.availability_date}"\r\n'
+        f'TEXT 30,318,"3",0,1,1,"Dispo: {data.availability_date}"\r\n'
         # Separateur / Separator
-        "BAR 20,400,536,3\r\n"
+        f"BAR 20,{QR_Y_DOTS - 16},536,3\r\n"
         # QR code centre (#103) / Centred QR code
         # QRCODE x,y,correction,taille_cellule,mode,rotation,"contenu"
         f'QRCODE {QR_X_DOTS},{QR_Y_DOTS},M,{QR_MAGNIFICATION},A,0,"{label_code}"\r\n'
-        # Code en clair sous le QR, centre a la main (TSPL n'a pas de bloc
-        # centre) : police "3" = 16 dots de large par caractere a l'echelle 1. /
-        # Human-readable fallback, centred by hand.
-        f'TEXT {_tspl_centre(len(label_code), 16)},{QR_Y_DOTS + QR_SIZE_DOTS + 10},"3",0,1,1,"{label_code}"\r\n'
-        # Numero de sequence / Sequence number
-        f'TEXT 30,{QR_Y_DOTS + QR_SIZE_DOTS + 55},"3",0,1,1,"{data.sequence_number}/{data.total_labels}"\r\n'
+        # Code en clair SOUS le QR, centre par calcul : police "3" = 16 dots de
+        # large par caractere a l'echelle 1. / Human-readable fallback below.
+        f'TEXT {_centre(len(label_code), 16)},{CODE_TEXT_Y_DOTS},"3",0,1,1,"{label_code}"\r\n'
         "PRINT 1\r\n"
     )
     return tspl

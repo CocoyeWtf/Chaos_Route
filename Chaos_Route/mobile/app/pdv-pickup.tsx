@@ -248,9 +248,13 @@ export default function PdvPickupScreen() {
 
       // 5. Resume / Summary
       if (failedLabelIds.length === 0) {
+        // « Envoyee » et non « imprimee » : l'app sait que les octets sont
+        // partis, elle ne voit pas sortir l'etiquette. Annoncer l'impression
+        // etait precisement le reproche du #86. / "Sent", not "printed".
         Alert.alert(
-          'Impression terminee',
-          `${printedLabelIds.length} etiquette(s) imprimee(s) avec succes.`,
+          'Impression lancee',
+          `${printedLabelIds.length} etiquette(s) envoyee(s) a ${printer.name}.`
+          + '\n\nSi une etiquette ne sort pas, relancez l\'impression depuis le web.',
         )
         reset()
       } else {

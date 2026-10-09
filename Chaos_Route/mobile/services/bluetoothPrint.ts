@@ -104,12 +104,79 @@ export async function listPairedPrinters(): Promise<BluetoothPrinter[]> {
   }))
 }
 
-/** Connecter, envoyer un payload RAW puis deconnecter /
- *  Connect, send RAW payload then disconnect.
+/* ── Connexion reutilisee / Reused connection ─────────────────────────────
+
+   Ticket #86 : « l'impression ne fonctionne que sur le premier encodage ».
+
+   L'implementation precedente etait « connect, write, disconnect » a chaque
+   etiquette. En RFCOMM, c'est precisement le scenario qui casse : le socket
+   referme n'est pas encore liberee cote pile Bluetooth Android quand la
+   connexion suivante est demandee, et la tentative part en
+   `java.io.IOException: read failed, socket might closed or timeout,
+   read ret: -1` — l'erreur relevee en production sur la Brother RJ-4250WB du
+   PDV 01717. Pire : `write()` qui resout ne prouve rien, les octets ne sont que
+   remis au socket ; en refermant aussitot, l'etiquette pouvait etre tronquee ou
+   jamais imprimee alors que l'app annoncait un succes.
+
+   Donc : une connexion par imprimante, gardee ouverte entre deux etiquettes,
+   un temps de drain apres chaque envoi, et une seule reprise automatique quand
+   le socket est trouve mort. La deconnexion devient explicite (changement
+   d'imprimante, test, mise en veille) au lieu d'etre systematique. /
+   Keep one connection per printer instead of reopening it per label — the
+   reopen is exactly what fails on Android RFCOMM. */
+
+/** Laisser le temps aux octets de partir avant toute fermeture / Let the bytes
+ *  reach the printer before anything closes the socket. */
+const DRAIN_MS = 400
+/** Pause avant la reprise : en dessous, la pile Bluetooth n'a pas encore
+ *  libere le socket et la reconnexion echoue pour la meme raison. */
+const RETRY_DELAY_MS = 900
+
+let _open: { address: string; device: any } | null = null
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** Fermer la connexion courante, sans bruit / Close the current connection. */
+export async function disconnectPrinter(): Promise<void> {
+  const mod = _loadModule()
+  const current = _open
+  _open = null
+  if (!mod || !current) return
+  try {
+    if (current.device?.disconnect) await current.device.disconnect()
+    else if (mod.disconnectFromDevice) await mod.disconnectFromDevice(current.address)
+  } catch {
+    // Deconnexion best-effort : l'imprimante a pu s'eteindre d'elle-meme.
+  }
+}
+
+/** Obtenir une connexion utilisable vers cette imprimante / Get a usable link. */
+async function _acquire(mod: any, address: string): Promise<any> {
+  if (_open && _open.address === address) {
+    try {
+      // `isConnected` interroge la pile, pas notre memoire : c'est ce qui
+      // distingue un socket encore vivant d'un souvenir. / Ask the stack.
+      if (await _open.device.isConnected()) return _open.device
+    } catch {
+      // Socket mort : on repart d'une connexion neuve.
+    }
+    await disconnectPrinter()
+  } else if (_open) {
+    // Changement d'imprimante : liberer l'ancienne avant d'ouvrir l'autre.
+    await disconnectPrinter()
+  }
+  const device = await mod.connectToDevice(address, { CONNECTOR_TYPE: 'rfcomm' })
+  _open = { address, device }
+  return device
+}
+
+/** Envoyer un payload RAW a l'imprimante / Send a RAW payload to the printer.
  *
- * Implementation simple "connect-and-fire-and-forget" : pas de connexion persistante,
- * chaque impression rouvre la connexion. Plus robuste face aux deconnexions
- * intempestives, au prix d'un delai supplementaire (~500ms) par etiquette.
+ * La connexion est ouverte au besoin puis CONSERVEE pour les etiquettes
+ * suivantes. Une seule reprise en cas de socket mort : au-dela, c'est
+ * l'imprimante qui est eteinte, hors de portee ou occupee, et insister ne
+ * ferait que retarder le message d'erreur. /
+ * Opens the link if needed and keeps it; retries once on a dead socket.
  */
 export async function printRaw(address: string, payload: string): Promise<PrintResult> {
   const mod = _loadModule()
@@ -119,27 +186,34 @@ export async function printRaw(address: string, payload: string): Promise<PrintR
       error: 'Module Bluetooth non installe (EAS build requis).',
     }
   }
-  let device: any = null
-  try {
-    device = await mod.connectToDevice(address, { CONNECTOR_TYPE: 'rfcomm' })
-    // ZPL/TSPL doivent etre envoyes en ASCII brut, sans encodage UTF-8 multibyte /
-    // ZPL/TSPL must be sent as raw ASCII, not multibyte UTF-8
-    await device.write(payload)
-    return { success: true }
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
-    return { success: false, error: msg }
-  } finally {
+
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      if (device?.disconnect) {
-        await device.disconnect()
-      } else if (mod.disconnectFromDevice) {
-        await mod.disconnectFromDevice(address)
+      const device = await _acquire(mod, address)
+      // ZPL/TSPL doivent etre envoyes en ASCII brut, sans encodage UTF-8 multibyte /
+      // ZPL/TSPL must be sent as raw ASCII, not multibyte UTF-8
+      await device.write(payload)
+      // Le drain n'est pas de la superstition : sans lui, une fermeture ou un
+      // envoi immediat peut tronquer l'etiquette en cours. / Not superstition.
+      await sleep(DRAIN_MS)
+      return { success: true }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      // La connexion gardee est suspecte des qu'un envoi echoue : on la jette.
+      await disconnectPrinter()
+      if (attempt === 0) {
+        await sleep(RETRY_DELAY_MS)
+        continue
       }
-    } catch {
-      // Best-effort disconnect : ne pas masquer l'erreur d'impression
+      return {
+        success: false,
+        error: msg + ' — verifiez que l\'imprimante est allumee, a portee et pas '
+          + 'connectee a un autre appareil.',
+      }
     }
   }
+  // Inatteignable : la boucle sort toujours par un return. / Unreachable.
+  return { success: false, error: 'Impression impossible' }
 }
 
 /** ZPL minimal de test (etiquette "TEST") / Minimal ZPL test label. */

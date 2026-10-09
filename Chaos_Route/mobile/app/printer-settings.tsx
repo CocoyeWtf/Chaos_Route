@@ -16,6 +16,7 @@ import {
   isBluetoothModuleAvailable,
   listPairedPrinters,
   printRaw,
+  disconnectPrinter,
   requestBluetoothPermissions,
   TEST_ZPL,
   TEST_TSPL,
@@ -94,6 +95,10 @@ export default function PrinterSettingsScreen() {
 
   const handleSelect = useCallback(async (device: BluetoothPrinter) => {
     const protocol = guessProtocol(device.name)
+    // La connexion est gardee ouverte entre deux etiquettes (#86) : changer
+    // d'imprimante sans la liberer laisserait un socket ouvert vers la
+    // precedente. / The link is kept open between labels; release it here.
+    await disconnectPrinter()
     await setSavedPrinter({
       address: device.address,
       name: device.name,
@@ -167,7 +172,7 @@ export default function PrinterSettingsScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity onPress={clearSavedPrinter} style={styles.clearBtn}>
+          <TouchableOpacity onPress={() => { disconnectPrinter(); clearSavedPrinter() }} style={styles.clearBtn}>
             <Text style={styles.clearBtnText}>Oublier cette imprimante</Text>
           </TouchableOpacity>
         </View>

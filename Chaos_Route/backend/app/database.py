@@ -318,6 +318,14 @@ async def _migrate_enum_values():
         ("pickupstatus", ["CANCELLED"]),  # Annulation declaration combi remplacee
         ("vehicletype", ["PORTEUR_SURBAISSE"]),  # Porteur surbaisse ajoute apres coup
         ("tourtype", ["TRANSFERT_PDV", "ENLEVEMENT_DEDIE"]),  # Transfert PDV a PDV + enlevement dedie ajoutes apres coup
+        # Cette liste est MANUELLE : elle ne se deduit pas des modeles. Une
+        # valeur ajoutee a un Enum Python sans etre reportee ici manque en base,
+        # et la premiere ecriture qui l'utilise part en erreur. Constate le
+        # 2026-10-09 : PICKUP_PARTIAL et PICKUP_LOSS vivaient dans AlertType
+        # depuis des semaines et etaient absentes de l'enum PostgreSQL. /
+        # This list is MANUAL: a value added to a Python Enum and not mirrored
+        # here is missing in the database.
+        ("alerttype", ["PICKUP_PARTIAL", "PICKUP_LOSS"]),
     ]
     async with engine.begin() as conn:
         for enum_name, new_values in enum_updates:

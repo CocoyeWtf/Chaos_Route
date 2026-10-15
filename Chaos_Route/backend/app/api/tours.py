@@ -8,6 +8,7 @@ from types import SimpleNamespace
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -3069,6 +3070,8 @@ async def get_tour_cost_breakdown(
 
     segment_details = []
     km_tax_total = 0.0
+    segments_sans_distance = 0
+    segments_estimes = 0
     for seg in segments:
         tax_entry = await db.scalar(
             select(KmTax.tax_per_km).where(
@@ -3077,6 +3080,13 @@ async def get_tour_cost_breakdown(
             )
         )
         dist = await _get_distance(db, seg[0], seg[1], seg[2], seg[3])
+        # Un segment absent du distancier vaut 0 km et disparait du cout sans
+        # rien dire (#96) : c'est ainsi qu'une tournee au depart de Trazegnies
+        # sortait a 0 km de carburant et de taxe. On le compte pour l'annoncer.
+        if dist is None:
+            segments_sans_distance += 1
+        elif dist.is_estimated:
+            segments_estimes += 1
         seg_km = float(dist.distance_km) if dist else 0
         seg_tax = round(float(tax_entry), 2) if tax_entry else 0
         km_tax_total += seg_tax
@@ -3104,7 +3114,21 @@ async def get_tour_cost_breakdown(
             "destination": f"{seg[2]}:{dest_label}",
             "distance_km": seg_km,
             "segment_tax": seg_tax,
+            "distance_missing": dist is None,
+            "distance_estimated": bool(dist is not None and dist.is_estimated),
         })
+
+    if segments_sans_distance:
+        breakdown_warnings.append(
+            f"{segments_sans_distance} trajet(s) absent(s) du distancier : comptes "
+            f"0 km, donc sans carburant ni taxe kilometrique. Le cout de cette "
+            f"tournee est sous-evalue (#96)."
+        )
+    if segments_estimes:
+        breakdown_warnings.append(
+            f"{segments_estimes} trajet(s) estime(s) a vol d'oiseau, en attendant "
+            f"la distance reelle (#96)."
+        )
 
     # Contrat au forfait journalier (#60) : le détail se résume au forfait.
     if billing_type_of(contract) != 2:
@@ -3782,3 +3806,176 @@ async def get_tour_manifest(
         .order_by(TourManifestLine.pdv_code, TourManifestLine.id)
     )
     return result.scalars().all()
+
+
+class ChangeBaseRequest(BaseModel):
+    """Corriger la base de depart/retour de tournees deja construites (#87)."""
+    tour_ids: list[int] = Field(min_length=1, max_length=200)
+    base_id: int
+    # None = retour sur la base de depart (convention du #64).
+    return_base_id: int | None = None
+    # Deplacer aussi les volumes rattaches. Un tour = UNE base d'origine (#84),
+    # donc laisser les volumes derriere casserait l'invariant.
+    move_volumes: bool = True
+    dry_run: bool = False
+
+
+@router.post("/change-base")
+async def change_tours_base(
+    data: ChangeBaseRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-planning", "update")),
+):
+    """Changer la base de depart (et de retour) de plusieurs tournees (#87).
+
+    Gaetan : « une erreur a l'importation des volumes de Trazegnies sur les tours
+    du 25/09. Le RCAM s'est trompe de site de depart et ne s'en est pas rendu
+    compte. Il a dit a CMRO depart et retour de Villers. Les tours sont valides
+    et envoyes a la poste. » Quinze tournees etaient a refaire a la main.
+
+    Ce que l'endpoint fait, et pourquoi :
+
+    - Il deplace AUSSI les volumes rattaches (`move_volumes`). Un tour n'a qu'une
+      seule base d'origine et ses volumes doivent la partager (#84) : les laisser
+      a Villers rendrait les tournees incoherentes et impossibles a re-editer.
+    - Il RECALCULE horaires, kilometrage et cout. Changer la base sans recalculer
+      laisserait les kms de Villers sur des tournees parties de Trazegnies —
+      l'erreur aurait juste change de place.
+    - Il REFUSE une tournee deja sortie (barriere franchie) : a ce stade le
+      camion est physiquement parti d'un site, et la trace du poste de garde est
+      un constat qu'on ne reecrit pas. Celles-la sont renvoyees pour traitement
+      manuel plutot que silencieusement ignorees.
+    - `dry_run` annonce ce qui changerait avant d'y toucher : l'action porte sur
+      des tournees deja envoyees a la poste.
+    """
+    base = await db.get(BaseLogistics, data.base_id)
+    if not base:
+        raise HTTPException(status_code=404, detail="Base de depart introuvable")
+    if data.return_base_id is not None:
+        if not await db.get(BaseLogistics, data.return_base_id):
+            raise HTTPException(status_code=404, detail="Base de retour introuvable")
+
+    # Convention #64 : retour = depart s'ecrit NULL, une seule forme pour le cas normal.
+    return_base_id = data.return_base_id if data.return_base_id != data.base_id else None
+
+    result = await db.execute(
+        select(Tour).where(Tour.id.in_(data.tour_ids)).options(selectinload(Tour.stops))
+    )
+    tours = result.scalars().all()
+    trouves = {t.id for t in tours}
+    introuvables = [i for i in data.tour_ids if i not in trouves]
+
+    deja_parties: list[str] = []
+    modifies: list[dict] = []
+    volumes_deplaces = 0
+
+    for tour in tours:
+        if tour.barrier_exit_time:
+            deja_parties.append(tour.code)
+            continue
+        if tour.base_id == data.base_id and tour.return_base_id == return_base_id:
+            continue
+
+        ancienne_base = tour.base_id
+        ancien_km = float(tour.total_km or 0)
+        ancien_cout = float(tour.total_cost or 0)
+
+        tour.base_id = data.base_id
+        tour.return_base_id = return_base_id
+
+        stops_data = [
+            {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
+            for s in sorted(tour.stops, key=lambda s: s.sequence_order)
+        ]
+
+        # Horaires, km / Times and distance
+        total_km = ancien_km
+        if tour.departure_time and stops_data:
+            enriched, return_time, total_duration = await calculate_tour_times(
+                tour.departure_time, stops_data, data.base_id, db,
+                return_base_id=return_base_id,
+                final_pickup_supplier_id=tour.final_pickup_supplier_id,
+                final_pickup_duration_minutes=tour.final_pickup_duration_minutes,
+            )
+            total_km = sum(s.get("distance_from_previous_km", 0) for s in enriched)
+            total_km += await _km_after_last_stop(
+                db, enriched[-1]["pdv_id"], data.base_id, return_base_id,
+                tour.final_pickup_supplier_id,
+            )
+            total_km = round(total_km, 2)
+            tour.return_time = return_time
+            tour.total_duration_minutes = total_duration
+            tour.total_km = total_km
+            for stop in tour.stops:
+                maj = next((e for e in enriched if e["pdv_id"] == stop.pdv_id
+                            and e["sequence_order"] == stop.sequence_order), None)
+                if maj:
+                    stop.arrival_time = maj["arrival_time"]
+                    stop.departure_time = maj["departure_time"]
+
+        # Volumes : meme base d'origine que leur tournee (#84)
+        if data.move_volumes:
+            vols = (await db.execute(
+                select(Volume).where(Volume.tour_id == tour.id)
+            )).scalars().all()
+            for v in vols:
+                if v.base_origin_id != data.base_id:
+                    if not data.dry_run:
+                        v.base_origin_id = data.base_id
+                    volumes_deplaces += 1
+
+        modifies.append({
+            "tour_id": tour.id, "tour_code": tour.code,
+            "ancienne_base_id": ancienne_base, "nouvelle_base_id": data.base_id,
+            "ancien_km": ancien_km, "nouveau_km": total_km,
+            "ancien_cout": ancien_cout,
+        })
+
+    if data.dry_run:
+        await db.rollback()
+        return {
+            "dry_run": True,
+            "modifiables": modifies,
+            "deja_parties": deja_parties,
+            "introuvables": introuvables,
+            "volumes_a_deplacer": volumes_deplaces,
+        }
+
+    await db.flush()
+
+    # Cout : apres le flush, pour que le nombre de tournees du jour soit juste
+    # (la vacation se repartit dessus).
+    for info in modifies:
+        tour = next(t for t in tours if t.id == info["tour_id"])
+        if not tour.contract_id:
+            continue
+        contract = await db.get(Contract, tour.contract_id)
+        if not contract:
+            continue
+        stops_data = [
+            {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
+            for s in sorted(tour.stops, key=lambda s: s.sequence_order)
+        ]
+        nouveau_cout, _ = await _calculate_cost(
+            db, float(tour.total_km or 0), contract, tour.date, tour.base_id, stops_data,
+            own_trailer=bool(getattr(tour, "vehicle_id", None)),
+            return_base_id=tour.return_base_id,
+            final_pickup_supplier_id=tour.final_pickup_supplier_id,
+        )
+        tour.total_cost = nouveau_cout
+        info["nouveau_cout"] = nouveau_cout
+        await _log_audit(db, "tour", tour.id, "CHANGE_BASE", user, {
+            "ancienne_base_id": info["ancienne_base_id"],
+            "nouvelle_base_id": info["nouvelle_base_id"],
+            "ancien_km": info["ancien_km"], "nouveau_km": info["nouveau_km"],
+            "ancien_cout": info["ancien_cout"], "nouveau_cout": nouveau_cout,
+        })
+
+    await db.flush()
+    return {
+        "dry_run": False,
+        "modifies": modifies,
+        "deja_parties": deja_parties,
+        "introuvables": introuvables,
+        "volumes_deplaces": volumes_deplaces,
+    }

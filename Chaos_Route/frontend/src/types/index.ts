@@ -563,6 +563,8 @@ export interface DistanceEntry {
   duration_minutes: number
   origin_label?: string
   destination_label?: string
+  /* Distance estimee a vol d'oiseau et non mesuree (#96). */
+  is_estimated?: boolean
 }
 
 export interface Parameter {
@@ -1344,4 +1346,36 @@ export interface BaseMovementRecord {
   reference: string | null
   timestamp: string
   notes: string | null
+}
+
+
+/** Températures d'UN arrêt (#71).
+
+    Le piège, corrigé deux fois : chercher « les volumes de ce point de vente
+    dans cette tournée » et les afficher tous sur chaque ligne. Un PDV livré en
+    SEC et en FRAIS a deux arrêts, et les deux sortaient étiquetés « FRAIS SEC » —
+    on ne savait plus lequel transportait quoi. L'application connaît pourtant le
+    volume réellement rattaché à l'arrêt.
+
+    Corrigé une première fois chez le postier ; l'ordonnancement portait encore
+    l'ancienne lecture, d'où la réouverture du ticket. Le helper est partagé pour
+    que les deux écrans ne puissent plus diverger.
+
+    Ordre de lecture : le volume de l'arrêt, sinon la classe portée par l'arrêt,
+    sinon seulement l'ensemble des volumes du PDV (arrêts anciens, sans volume
+    source). / Temperature of ONE stop, read from its own volume. */
+export function stopTemperatures(
+  stop: { volume_id?: number | null; temperature_class?: string | null; pdv_id: number },
+  tourId: number,
+  volumes: { id: number; tour_id?: number | null; pdv_id: number; temperature_class: string }[],
+): TemperatureClass[] {
+  if (stop.volume_id != null) {
+    const propre = volumes.find((v) => v.id === stop.volume_id)
+    if (propre) return [propre.temperature_class as TemperatureClass]
+  }
+  if (stop.temperature_class) return [stop.temperature_class as TemperatureClass]
+  const duPdv = volumes
+    .filter((v) => v.tour_id === tourId && v.pdv_id === stop.pdv_id)
+    .map((v) => v.temperature_class as TemperatureClass)
+  return Array.from(new Set(duPdv))
 }

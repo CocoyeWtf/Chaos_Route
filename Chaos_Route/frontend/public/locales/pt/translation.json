@@ -577,7 +577,8 @@
     "gantt": "Agendamento",
     "autoRefresh": "Auto ⟳ 30s",
     "barrierExit": "Saída",
-    "tour2Impact": "O retorno estimado de {{code1}} ({{time1}}) sobrepõe a partida de {{code2}} ({{time2}}) — desvio de {{overlap}}min"
+    "tour2Impact": "O retorno estimado de {{code1}} ({{time1}}) sobrepõe a partida de {{code2}} ({{time2}}) — desvio de {{overlap}}min",
+    "tour2ImpactActual": "O retorno constatado de {{code1}} ({{time1}}) é posterior à partida de {{code2}} ({{time2}}) — desvio de {{overlap}}min"
   },
   "guardPost": {
     "title": "Portaria — Passagens na barreira",

@@ -592,7 +592,8 @@
     "gantt": "Ordonnancement",
     "autoRefresh": "Auto ⟳ 30s",
     "barrierExit": "Sortie",
-    "tour2Impact": "Le retour estimé de {{code1}} ({{time1}}) chevauche le départ de {{code2}} ({{time2}}) — décalage de {{overlap}}min"
+    "tour2Impact": "Le retour estimé de {{code1}} ({{time1}}) chevauche le départ de {{code2}} ({{time2}}) — décalage de {{overlap}}min",
+    "tour2ImpactActual": "Le retour constaté de {{code1}} ({{time1}}) est postérieur au départ de {{code2}} ({{time2}}) — décalage de {{overlap}}min"
   },
   "guardPost": {
     "title": "Poste de garde — Passages barrière",

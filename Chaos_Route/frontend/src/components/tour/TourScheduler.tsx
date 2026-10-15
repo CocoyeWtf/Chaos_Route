@@ -8,12 +8,13 @@ import { useAuthStore } from '../../stores/useAuthStore'
 import { TourGantt, type GanttTour } from './TourGantt'
 import { TourPrintPlan } from './TourPrintPlan'
 import { formatDuration, parseTime, formatTime, formatDate, DEFAULT_DOCK_TIME, DEFAULT_UNLOAD_PER_EQP } from '../../utils/tourTimeUtils'
-import { driverWorksOn } from '../../types'
+import { driverWorksOn, stopTemperatures } from '../../types'
+import { ChangeBaseDialog } from './ChangeBaseDialog'
 import { VEHICLE_TYPE_DEFAULTS, TEMPERATURE_TYPE_LABELS, TEMPERATURE_COLORS, TOUR_TYPE_LABELS } from '../../types'
 import api, { downloadPostierPlanning } from '../../services/api'
 import { CostBreakdown } from './CostBreakdown'
 import { TransporterConfirmationModal, type ConfirmTransporter } from './TransporterConfirmationModal'
-import type { Tour, BaseLogistics, Contract, DistanceEntry, PDV, VehicleType, TemperatureType, TemperatureClass, Volume, Vehicle, AssignmentMode, AvailableVehicle, Supplier } from '../../types'
+import type { Tour, BaseLogistics, Contract, DistanceEntry, PDV, VehicleType, TemperatureType, Volume, Vehicle, AssignmentMode, AvailableVehicle, Supplier } from '../../types'
 
 /* Filtres activité / Activity filter options */
 const ACTIVITY_FILTERS: { key: string; label: string }[] = [
@@ -194,6 +195,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   const [driverFilter, setDriverFilter] = useState('ALL')
   /* Filtre base d'origine (ticket #20) : différencier le lieu de départ / Origin base filter */
   const [baseFilter, setBaseFilter] = useState('ALL')
+  const [showChangeBase, setShowChangeBase] = useState(false)
   /* Filtres multi-select / Multi-select filters */
   const [vehicleTypeFilters, setVehicleTypeFilters] = useState<Set<VehicleType>>(new Set())
   const [modeFilters, setModeFilters] = useState<Set<AssignmentMode>>(new Set())
@@ -542,14 +544,22 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   }, [tours, showValidated, onlyToPlan, activityFilter, driverFilter, baseFilter, tourVehicleMap, vehicleTypeFilters, modeFilters, contractFilters, kmRange, durationRange, departureRange, tourDuration])
 
   /* Bases d'origine présentes dans les tours du jour (ticket #20) / Origin bases present in today's tours */
+  /* Bases en jeu ce jour-là (#93). Elles se déduisaient des seules TOURNÉES :
+     tant qu'aucune tournée n'était construite — c'est-à-dire au moment précis où
+     l'on en construit — la liste était vide et le filtre disparaissait. Samuel
+     l'avait déjà signalé sur le #78 (« le filtre n'apparaît pas lorsqu'il n'y a
+     les volumes que d'une base »), Gaetan le reformule : « on ne sait pas dire
+     si on fait des tours de Trazegnies ou de Gosselies ». On lit donc aussi les
+     VOLUMES du jour. / Derived from the day's volumes as well as its tours. */
   const availableBases = useMemo(() => {
     const ids = new Set<number>()
     tours.forEach((t) => { if (t.base_id != null) ids.add(t.base_id) })
+    allVolumes.forEach((v) => { if (v.base_origin_id != null) ids.add(v.base_origin_id) })
     return Array.from(ids)
       .map((id) => bases.find((b) => b.id === id))
       .filter((b): b is BaseLogistics => b != null)
       .sort((a, b) => a.code.localeCompare(b.code))
-  }, [tours, bases])
+  }, [tours, allVolumes, bases])
 
   /* Liste unique triée: planifiés d'abord par heure départ, puis non-planifiés /
      Unified sorted list: scheduled first by departure time, then unscheduled */
@@ -1162,9 +1172,13 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               <span className="font-bold shrink-0" style={{ color: 'var(--text-primary)' }}>
                 {stop.eqp_count} EQC
               </span>
-              {/* Température par stop (bi-temp / tri-temp) / Temperature per stop */}
-              {stopVolumes.length > 0 && (tour.temperature_type === 'BI_TEMP' || tour.temperature_type === 'TRI_TEMP') && (() => {
-                const temps = [...new Set(stopVolumes.map((v) => v.temperature_class))] as TemperatureClass[]
+              {/* Température de CET arrêt (#71). On lisait « tous les volumes de ce
+                  PDV dans cette tournée » : un point de vente livré en sec ET en
+                  frais voyait ses deux arrêts étiquetés « FRAIS SEC ». Corrigé
+                  chez le postier en septembre, l'ordonnancement avait gardé
+                  l'ancienne lecture — d'où la réouverture. Helper partagé. */}
+              {(tour.temperature_type === 'BI_TEMP' || tour.temperature_type === 'TRI_TEMP') && (() => {
+                const temps = stopTemperatures(stop, tour.id, allVolumes)
                 return temps.map((tc) => (
                   <span
                     key={tc}
@@ -1469,8 +1483,12 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
           </div>
         )}
 
-        {/* Filtre base d'origine (ticket #20) / Origin base filter */}
-        {availableBases.length > 1 && (
+        {/* Filtre base d'origine (#20, élargi au #93). Affiché dès QU'UNE base est
+            en jeu, et plus seulement à partir de deux : avec une seule base, le
+            menu nomme la base sur laquelle on travaille — ce que Gaetan demande —
+            et il reste prêt le jour où un second import arrive en cours de
+            journée. / Shown from one base on, not two. */}
+        {availableBases.length > 0 && (
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
               Base d'origine
@@ -1589,6 +1607,17 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               alors que l'export est justement censé sortir les brouillons. Il ne
               dépend plus que de l'existence d'une tournée ce jour-là. /
               Moved out of the "has a scheduled tour" gate. */}
+          {/* Corriger la base de départ de tournées déjà construites (#87) */}
+          {tours.length > 0 && (
+            <button
+              onClick={() => setShowChangeBase(true)}
+              className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80"
+              style={{ borderColor: 'var(--color-warning)', color: 'var(--color-warning)' }}
+              title="Corriger la base de départ et de retour de plusieurs tournées — recalcule horaires, km et coût, et déplace les volumes"
+            >
+              Base de départ
+            </button>
+          )}
           {tours.length > 0 && (
             <button
               onClick={handleExportPlanning}
@@ -2782,6 +2811,15 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
 
       {costTourId && (
         <CostBreakdown tourId={costTourId} onClose={() => setCostTourId(null)} />
+      )}
+
+      {showChangeBase && (
+        <ChangeBaseDialog
+          tours={tours}
+          bases={bases}
+          onClose={() => setShowChangeBase(false)}
+          onDone={() => { loadData() }}
+        />
       )}
 
       {showConfirmMail && (

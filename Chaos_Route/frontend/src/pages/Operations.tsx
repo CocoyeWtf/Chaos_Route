@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { QRCodeSVG } from 'qrcode.react'
 import api, { downloadPostierPlanning } from '../services/api'
 import type { Tour, BaseLogistics, Contract, PDV, Volume, ManifestLine, ManifestImportResult, MobileDevice, VehicleSummary, TemperatureClass } from '../types'
-import { TEMPERATURE_COLORS, TOUR_TYPE_LABELS } from '../types'
+import { TEMPERATURE_COLORS, TOUR_TYPE_LABELS, stopTemperatures } from '../types'
 import { TourWaybill } from '../components/tour/TourWaybill'
 import { DriverRouteSheet } from '../components/tour/DriverRouteSheet'
 import { TourGantt } from '../components/operations/TourGantt'
@@ -708,8 +708,12 @@ export default function Operations() {
         <div key={i} className="flex items-center gap-2 mb-3 px-4 py-2 rounded-lg border text-sm font-semibold"
           style={{ backgroundColor: 'rgba(239,68,68,0.08)', borderColor: 'var(--color-danger)', color: 'var(--color-danger)' }}>
           <span>&#9888;</span>
-          <span>{t('operations.tour2Impact', {
-            code1: imp.delayedTour.code, time1: imp.delayedTour.estimated_return,
+          {/* « Retour estimé » tant que le camion n'est pas rentré, « retour
+              constaté » dès que le poste de garde l'a enregistré (#101) : le
+              postier doit savoir s'il lit une prévision ou un fait. */}
+          <span>{t(imp.fromActualReturn ? 'operations.tour2ImpactActual' : 'operations.tour2Impact', {
+            code1: imp.delayedTour.code,
+            time1: imp.delayedTour.effective_return,
             code2: imp.impactedTour.code, time2: imp.impactedTour.departure_time, overlap: imp.overlapMinutes,
           })}</span>
         </div>
@@ -1292,17 +1296,7 @@ function TourRow({
                          du point de vente (arrêts anciens, sans volume source). /
                          Temperature of THIS stop: read its own volume instead of
                          guessing from every volume of the PDV. */
-                      const stopTemps: TemperatureClass[] = (() => {
-                        if (stop.volume_id != null) {
-                          const propre = volumes.find((v) => v.id === stop.volume_id)
-                          if (propre) return [propre.temperature_class]
-                        }
-                        if (stop.temperature_class) return [stop.temperature_class]
-                        const duPdv = volumes
-                          .filter((v) => v.tour_id === tour.id && v.pdv_id === stop.pdv_id)
-                          .map((v) => v.temperature_class)
-                        return Array.from(new Set(duPdv))
-                      })()
+                      const stopTemps: TemperatureClass[] = stopTemperatures(stop, tour.id, volumes)
 
                       return (
                         <tr key={stop.id} className="border-t" style={{ borderColor: 'var(--border-color)' }}>

@@ -26,3 +26,5 @@ class DistanceMatrixRead(DistanceMatrixBase):
     id: int
     origin_label: str | None = None
     destination_label: str | None = None
+    # Distance estimee et non mesuree (#96) : l'interface doit le dire.
+    is_estimated: bool = False

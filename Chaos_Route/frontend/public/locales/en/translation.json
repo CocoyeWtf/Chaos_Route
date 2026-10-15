@@ -577,7 +577,8 @@
     "gantt": "Scheduling",
     "autoRefresh": "Auto ⟳ 30s",
     "barrierExit": "Exit",
-    "tour2Impact": "Estimated return of {{code1}} ({{time1}}) overlaps departure of {{code2}} ({{time2}}) — {{overlap}}min shift"
+    "tour2Impact": "Estimated return of {{code1}} ({{time1}}) overlaps departure of {{code2}} ({{time2}}) — {{overlap}}min shift",
+    "tour2ImpactActual": "Actual return of {{code1}} ({{time1}}) is later than departure of {{code2}} ({{time2}}) — {{overlap}}min shift"
   },
   "guardPost": {
     "title": "Guard post — Barrier passages",

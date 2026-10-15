@@ -342,6 +342,14 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
     const m = new Map<number, Record<string, number>>()
     for (const v of allDayVolumes) {
       if (tempFilters.size > 0 && !tempFilters.has(v.temperature_class)) continue
+      /* Filtre de base d'origine (#94). Il était appliqué au panneau latéral et
+         aux clics sur la carte (#23), mais PAS au compteur d'EQC affiché sur le
+         point de vente : un PDV servi depuis Gosselies ET Trazegnies cumulait
+         les deux, quel que soit le filtre. Les deux vues se contredisaient, et
+         on construisait un tour sur un tonnage qui n'était pas celui de la base
+         qu'on croyait traiter. / Origin-base filter now applies to the map's
+         EQC badge too, not just the side panel. */
+      if (baseFilters.size > 0 && !baseFilters.has(v.base_origin_id)) continue
       /* Ignorer les volumes déjà planifiés / Skip already-planned volumes */
       if (v.tour_id || consumedVolumeIds.has(v.id)) continue
       const existing = m.get(v.pdv_id) || {}
@@ -349,7 +357,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       m.set(v.pdv_id, existing)
     }
     return m
-  }, [allDayVolumes, consumedVolumeIds, tempFilters])
+  }, [allDayVolumes, consumedVolumeIds, tempFilters, baseFilters])
 
   const pdvMap = useMemo(() => new Map(pdvs.map((p) => [p.id, p])), [pdvs])
 

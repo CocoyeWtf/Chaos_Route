@@ -577,7 +577,8 @@
     "gantt": "Planning",
     "autoRefresh": "Auto ⟳ 30s",
     "barrierExit": "Uitgang",
-    "tour2Impact": "Geschatte terugkeer van {{code1}} ({{time1}}) overlapt vertrek van {{code2}} ({{time2}}) — verschuiving van {{overlap}}min"
+    "tour2Impact": "Geschatte terugkeer van {{code1}} ({{time1}}) overlapt vertrek van {{code2}} ({{time2}}) — verschuiving van {{overlap}}min",
+    "tour2ImpactActual": "De vastgestelde terugkeer van {{code1}} ({{time1}}) ligt na het vertrek van {{code2}} ({{time2}}) — {{overlap}}min verschuiving"
   },
   "guardPost": {
     "title": "Wachtpost — Slagboompassages",

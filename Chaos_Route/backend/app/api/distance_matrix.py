@@ -177,3 +177,195 @@ async def delete_distance(
     if not entry:
         raise HTTPException(status_code=404, detail="Distance entry not found")
     await db.delete(entry)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trous du distancier (#96)
+#
+# Gaetan : « les distanciers temps et km ne fonctionnent pas. Depart de
+# Gosselies = 132 km pour 03h10 (OK). Par contre a Trazegnies = 0 km pour 46 min ».
+# Le distancier n'a aucune ligne pour Trazegnies, Gosselies MEA ni Heppignies :
+# seules Villers (164 PDV) et Gosselies SEC (158) sont couvertes. Et une paire
+# absente vaut `None` dans `_get_distance`, donc 0 km et 0 minute dans le calcul
+# — les 46 minutes vues par Gaetan ne sont que le temps de quai et de
+# dechargement. Toute tournee partant d'une de ces trois bases sort donc avec un
+# kilometrage, un carburant et une taxe km nuls.
+#
+# Deux facons de combler, dans cet ordre :
+#  1. Une base jumelle aux MEMES coordonnees a deja la ligne — c'est le cas de
+#     « 092 MEA », au meme endroit que « 092 Gosselies SEC ». On la recopie :
+#     ce n'est pas une estimation, c'est le meme trajet.
+#  2. Sinon, estimation routiere (vol d'oiseau x coefficient), marquee comme
+#     telle pour etre remplacee sans hesiter des que la vraie valeur arrive.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VITESSE_MOYENNE_KMH = 50.0  # vitesse de rabattement pour estimer la duree
+
+
+def _memes_coordonnees(a: BaseLogistics, b: BaseLogistics) -> bool:
+    """Deux bases au meme endroit (a ~10 m pres) / Same place, within ~10 m."""
+    if None in (a.latitude, a.longitude, b.latitude, b.longitude):
+        return False
+    return (abs(float(a.latitude) - float(b.latitude)) < 1e-4
+            and abs(float(a.longitude) - float(b.longitude)) < 1e-4)
+
+
+async def _etat_distancier(db: AsyncSession) -> list[dict]:
+    """Couverture base par base / Per-base coverage of the matrix."""
+    bases = (await db.execute(select(BaseLogistics).order_by(BaseLogistics.code))).scalars().all()
+    nb_pdv = len((await db.execute(select(PDV.id))).scalars().all())
+    entries = (await db.execute(
+        select(DistanceMatrix).where(
+            or_(DistanceMatrix.origin_type == "BASE", DistanceMatrix.destination_type == "BASE")
+        )
+    )).scalars().all()
+
+    couverture: dict[int, set[int]] = {b.id: set() for b in bases}
+    estimees: dict[int, int] = {b.id: 0 for b in bases}
+    for e in entries:
+        if e.origin_type == "BASE" and e.destination_type == "PDV" and e.origin_id in couverture:
+            couverture[e.origin_id].add(e.destination_id)
+            if e.is_estimated:
+                estimees[e.origin_id] += 1
+        elif e.destination_type == "BASE" and e.origin_type == "PDV" and e.destination_id in couverture:
+            couverture[e.destination_id].add(e.origin_id)
+            if e.is_estimated:
+                estimees[e.destination_id] += 1
+
+    return [
+        {
+            "base_id": b.id,
+            "base_code": b.code,
+            "base_name": b.name,
+            "has_coordinates": b.latitude is not None and b.longitude is not None,
+            "pdv_total": nb_pdv,
+            "pdv_covered": len(couverture[b.id]),
+            "pdv_missing": nb_pdv - len(couverture[b.id]),
+            "estimated_rows": estimees[b.id],
+        }
+        for b in bases
+    ]
+
+
+@router.get("/coverage")
+async def distance_coverage(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("distances", "read")),
+):
+    """Combien de points de vente chaque base sait-elle joindre ? (#96)
+
+    Sans cet ecran, un trou de distancier ne se voit qu'au moment ou une tournee
+    sort a 0 km — c'est-a-dire trop tard.
+    """
+    return await _etat_distancier(db)
+
+
+@router.post("/fill-missing")
+async def fill_missing_distances(
+    base_id: int | None = Query(default=None, description="Limiter a une base"),
+    dry_run: bool = Query(default=True, description="Simuler sans ecrire"),
+    factor: float = Query(default=1.3, ge=1.0, le=2.0,
+                          description="Coefficient vol d'oiseau vers route"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("distances", "create")),
+):
+    """Combler les paires base <-> PDV absentes du distancier (#96).
+
+    `dry_run` par defaut : on annonce ce qui serait ecrit avant de l'ecrire. Les
+    lignes existantes ne sont JAMAIS modifiees — on ne remplace pas une distance
+    mesuree par une estimation.
+    """
+    from app.services.distance_service import DistanceService
+
+    bases = (await db.execute(select(BaseLogistics).order_by(BaseLogistics.code))).scalars().all()
+    if base_id is not None:
+        bases = [b for b in bases if b.id == base_id]
+        if not bases:
+            raise HTTPException(status_code=404, detail="Base introuvable")
+
+    pdvs = (await db.execute(select(PDV).order_by(PDV.code))).scalars().all()
+    toutes_bases = (await db.execute(select(BaseLogistics))).scalars().all()
+
+    entries = (await db.execute(
+        select(DistanceMatrix).where(
+            or_(DistanceMatrix.origin_type == "BASE", DistanceMatrix.destination_type == "BASE")
+        )
+    )).scalars().all()
+    connues: dict[tuple[int, int], DistanceMatrix] = {}
+    for e in entries:
+        if e.origin_type == "BASE" and e.destination_type == "PDV":
+            connues.setdefault((e.origin_id, e.destination_id), e)
+        elif e.destination_type == "BASE" and e.origin_type == "PDV":
+            connues.setdefault((e.destination_id, e.origin_id), e)
+
+    copiees = 0
+    estimees = 0
+    impossibles: list[str] = []
+    detail_par_base: dict[str, dict] = {}
+
+    for base in bases:
+        jumelles = [b for b in toutes_bases if b.id != base.id and _memes_coordonnees(base, b)]
+        stats = {"copiees": 0, "estimees": 0, "impossibles": 0, "deja_connues": 0}
+
+        for pdv in pdvs:
+            if (base.id, pdv.id) in connues:
+                stats["deja_connues"] += 1
+                continue
+
+            # 1. Base jumelle au meme endroit : on recopie la vraie valeur.
+            source = None
+            for jumelle in jumelles:
+                source = connues.get((jumelle.id, pdv.id))
+                if source is not None:
+                    break
+
+            if source is not None:
+                ligne = DistanceMatrix(
+                    origin_type="BASE", origin_id=base.id,
+                    destination_type="PDV", destination_id=pdv.id,
+                    distance_km=source.distance_km,
+                    duration_minutes=source.duration_minutes,
+                    is_estimated=source.is_estimated,
+                )
+                stats["copiees"] += 1
+                copiees += 1
+            else:
+                # 2. Estimation routiere, a condition d'avoir les coordonnees.
+                if None in (base.latitude, base.longitude, pdv.latitude, pdv.longitude):
+                    stats["impossibles"] += 1
+                    if len(impossibles) < 20:
+                        impossibles.append(f"{base.code} / {pdv.code} (coordonnees manquantes)")
+                    continue
+                vol = DistanceService.haversine_km(
+                    float(base.latitude), float(base.longitude),
+                    float(pdv.latitude), float(pdv.longitude),
+                )
+                km = DistanceService.estimate_road_distance(vol, factor)
+                ligne = DistanceMatrix(
+                    origin_type="BASE", origin_id=base.id,
+                    destination_type="PDV", destination_id=pdv.id,
+                    distance_km=km,
+                    duration_minutes=max(1, round(km / _VITESSE_MOYENNE_KMH * 60)),
+                    is_estimated=True,
+                )
+                stats["estimees"] += 1
+                estimees += 1
+
+            if not dry_run:
+                db.add(ligne)
+            connues[(base.id, pdv.id)] = ligne
+
+        detail_par_base[base.code] = stats
+
+    if not dry_run:
+        await db.flush()
+
+    return {
+        "dry_run": dry_run,
+        "factor": factor,
+        "copiees_depuis_base_jumelle": copiees,
+        "estimees": estimees,
+        "impossibles": len(impossibles),
+        "exemples_impossibles": impossibles,
+        "detail_par_base": detail_par_base,
+    }

@@ -128,10 +128,13 @@ class TourBase(BaseModel):
 
 class TourCreate(TourBase):
     stops: list[TourStopCreate] = []
+    # Envoyer directement au « pot » des tournees en attente de date (#92).
+    pooled: bool = False
 
 
 class TourUpdate(BaseModel):
     date: str | None = None
+    pooled: bool | None = None
     code: str | None = None
     vehicle_type: str | None = None
     capacity_eqp: int | None = None
@@ -243,6 +246,7 @@ class TourRead(TourBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     stops: list[TourStopRead] = []
+    pooled: bool = False
 
 
 class ReorderStopsRequest(BaseModel):

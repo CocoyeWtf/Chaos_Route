@@ -546,6 +546,10 @@ async def list_tours(
     delivery_date: str | None = None,
     base_id: int | None = None,
     status: str | None = None,
+    include_pooled: bool = Query(
+        default=False,
+        description="Inclure les tournees au pot, en attente de date (#92)",
+    ),
     limit: int = Query(default=200, le=2000),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -558,8 +562,14 @@ async def list_tours(
     Lu par l'ordonnancement (`tour-planning:read`) ET par l'écran postier
     (`operations:read`, ticket #107). Le périmètre reste borné par la région de
     l'utilisateur quelle que soit la permission qui ouvre la porte.
+
+    Les tournées « au pot » (#92) sont exclues par défaut : construites à
+    l'avance, elles n'appartiennent pas encore à une journée et pollueraient
+    toutes les listes du jour. `include_pooled=true` les ramène.
     """
     query = select(Tour).options(selectinload(Tour.stops))
+    if not include_pooled:
+        query = query.where(Tour.pooled == False)  # noqa: E712
     if date is not None:
         query = query.where(Tour.date == date)
     if date_from is not None:
@@ -1614,6 +1624,115 @@ async def transporter_confirmation_preview(
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Le « pot » : tournees construites a l'avance, en attente de date (#92)
+#
+# Gaetan : « les tours Gosselies-MEA sont faits le vendredi de la S-1. Lors de
+# la creation on dit a CMRO d'envoyer ces tours dans un "pot", et lorsqu'on
+# planifie un jour X de la S-0 on integre un ou des tours a la bonne date. Ce
+# sous-menu devrait avoir un indicatif des tours restant a planifier afin de ne
+# pas oublier de le faire, comme (48) pour 48 tours restant. »
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PoolScheduleRequest(BaseModel):
+    """Sortir des tournees du pot en leur donnant une date (#92)."""
+    tour_ids: list[int] = Field(min_length=1, max_length=200)
+    date: str
+    delivery_date: str | None = None
+
+
+@router.get("/pooled")
+async def list_pooled_tours(
+    base_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_permission(
+        ("tour-planning", "read"), ("operations", "read"),
+    )),
+):
+    """Tournees en attente de date, avec leur nombre (#92).
+
+    Le compteur est le point du ticket : sans lui, une tournee construite le
+    vendredi se perd jusqu'a ce que quelqu'un se souvienne d'aller la chercher.
+    """
+    query = (
+        select(Tour)
+        .where(Tour.pooled == True)  # noqa: E712
+        .options(selectinload(Tour.stops))
+        .order_by(Tour.id.desc())
+    )
+    if base_id is not None:
+        query = query.where(Tour.base_id == base_id)
+
+    user_region_ids = get_user_region_ids(user)
+    if user_region_ids is not None:
+        query = query.join(BaseLogistics, Tour.base_id == BaseLogistics.id).where(
+            BaseLogistics.region_id.in_(user_region_ids)
+        )
+
+    tours = (await db.execute(query)).scalars().all()
+    return {
+        "count": len(tours),
+        "tours": [
+            {
+                "id": t.id,
+                "code": t.code,
+                "base_id": t.base_id,
+                "built_on": t.date,
+                "vehicle_type": t.vehicle_type.value if hasattr(t.vehicle_type, "value") else t.vehicle_type,
+                "temperature_type": t.temperature_type.value if hasattr(t.temperature_type, "value") else t.temperature_type,
+                "stops_count": len(t.stops),
+                "total_eqp": float(t.total_eqp) if t.total_eqp else 0,
+                "total_km": float(t.total_km) if t.total_km else 0,
+            }
+            for t in tours
+        ],
+    }
+
+
+@router.post("/pooled/schedule")
+async def schedule_pooled_tours(
+    data: PoolScheduleRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-planning", "update")),
+):
+    """Sortir des tournees du pot en leur donnant leur vraie date (#92).
+
+    On REFUSE une tournee qui n'est pas au pot : l'appel sert a sortir du pot,
+    pas a redater une tournee deja planifiee — ce geste-la a ses propres ecrans
+    et ses propres controles.
+    """
+    result = await db.execute(
+        select(Tour).where(Tour.id.in_(data.tour_ids)).options(selectinload(Tour.stops))
+    )
+    tours = result.scalars().all()
+    trouves = {t.id for t in tours}
+
+    sorties: list[dict] = []
+    non_au_pot: list[str] = []
+    for tour in tours:
+        if not tour.pooled:
+            non_au_pot.append(tour.code)
+            continue
+        tour.pooled = False
+        tour.date = data.date
+        # La date de livraison n'est pas celle de la planification (une
+        # tournee planifiee le J est livree le J+1) : on ne l'ecrase que si
+        # elle est fournie, sinon la tournee garde la sienne.
+        if data.delivery_date:
+            tour.delivery_date = data.delivery_date
+        sorties.append({"tour_id": tour.id, "tour_code": tour.code, "date": data.date})
+        await _log_audit(db, "tour", tour.id, "POOL_SCHEDULE", user, {
+            "date": data.date, "delivery_date": tour.delivery_date,
+        })
+
+    await db.flush()
+    return {
+        "scheduled": sorties,
+        "not_pooled": non_au_pot,
+        "introuvables": [i for i in data.tour_ids if i not in trouves],
+    }
+
+
 @router.get("/{tour_id}", response_model=TourRead)
 async def get_tour(
     tour_id: int,
@@ -2031,6 +2150,7 @@ async def create_tour(
         final_pickup_duration_minutes=data.final_pickup_duration_minutes,
         temperature_type=data.temperature_type,
         is_pickup_tour=is_pickup,
+        pooled=data.pooled,
         tour_type=tour_type,
         destination=data.destination,
         supplier_id=data.supplier_id,
@@ -4013,3 +4133,4 @@ async def change_tours_base(
         "introuvables": introuvables,
         "volumes_deplaces": volumes_deplaces,
     }
+

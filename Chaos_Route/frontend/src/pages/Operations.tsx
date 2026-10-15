@@ -7,6 +7,7 @@ import api, { downloadPostierPlanning } from '../services/api'
 import type { Tour, BaseLogistics, Contract, PDV, Volume, ManifestLine, ManifestImportResult, MobileDevice, VehicleSummary, TemperatureClass } from '../types'
 import { TEMPERATURE_COLORS, TOUR_TYPE_LABELS, stopTemperatures } from '../types'
 import { TourWaybill } from '../components/tour/TourWaybill'
+import { CmrOverlay } from '../components/tour/CmrOverlay'
 import { DriverRouteSheet } from '../components/tour/DriverRouteSheet'
 import { TourGantt } from '../components/operations/TourGantt'
 import { computeTourDelay, detectSecondTourImpacts, DELAY_COLORS } from '../utils/tourDelay'
@@ -92,6 +93,9 @@ export default function Operations() {
   const [saving, setSaving] = useState<number | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [waybillTourId, setWaybillTourId] = useState<number | null>(null)
+  /* CMR en mode calque sur formulaire pre-imprime (#50) : le CMR complet
+     dessine ses propres cadres, illisible sur le papier FEBETRA. */
+  const [cmrOverlayTourId, setCmrOverlayTourId] = useState<number | null>(null)
   const [routeSheetTourId, setRouteSheetTourId] = useState<number | null>(null)
   const [assignQrTour, setAssignQrTour] = useState<{ id: number; code: string; driver_name?: string } | null>(null)
   const [assignMode, setAssignMode] = useState<'qr' | 'direct'>('qr')
@@ -589,6 +593,7 @@ export default function Operations() {
   return (
     <div className="p-6">
       {waybillTourId && <TourWaybill tourId={waybillTourId} onClose={() => setWaybillTourId(null)} />}
+      {cmrOverlayTourId && <CmrOverlay tourId={cmrOverlayTourId} onClose={() => setCmrOverlayTourId(null)} />}
       {routeSheetTourId && <DriverRouteSheet tourId={routeSheetTourId} onClose={() => setRouteSheetTourId(null)} />}
 
       {/* Modale affectation telephone (QR + direct) / Device assignment modal (QR + direct) */}
@@ -909,6 +914,7 @@ export default function Operations() {
                           onSave={() => handleSave(tour.id)}
                           onRouteSheet={() => setRouteSheetTourId(tour.id)}
                           onWaybill={() => setWaybillTourId(tour.id)}
+                          onCmrOverlay={() => setCmrOverlayTourId(tour.id)}
                           onAssignDevice={() => setAssignQrTour({ id: tour.id, code: tour.code, driver_name: tour.driver_name ?? undefined })}
                           onUnassignDevice={() => handleUnassignDevice(tour)}
                           onSetNow={(field) => updateForm(tour.id, field, nowFormatted())}
@@ -1181,6 +1187,7 @@ interface TourRowProps {
   onSave: () => void
   onRouteSheet: () => void
   onWaybill: () => void
+  onCmrOverlay: () => void
   onAssignDevice: () => void
   onUnassignDevice: () => void
   onSetNow: (field: string) => void
@@ -1201,7 +1208,7 @@ interface TourRowProps {
 function TourRow({
   tour, contract, form, isExpanded, color, pdvMap, volumes, saving, eqc, fleetVehicles,
   visibleCols, colCount, t,
-  onToggle, onFormChange, onSave, onRouteSheet, onWaybill, onAssignDevice, onUnassignDevice, onSetNow, onLoaderLookup, onPatchStopsEqc,
+  onToggle, onFormChange, onSave, onRouteSheet, onWaybill, onCmrOverlay, onAssignDevice, onUnassignDevice, onSetNow, onLoaderLookup, onPatchStopsEqc,
   canModifyStops, canDeleteTour, onRemoveStop, onAddStop, pdvs,
   onUpdateStopEqc, onDeclareRaq, onReorderStops, onDeleteTour,
 }: TourRowProps) {
@@ -1824,6 +1831,11 @@ function TourRow({
               <button onClick={(e) => { e.stopPropagation(); onWaybill() }}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80"
                 style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}>{t('operations.waybill')}</button>
+              {/* CMR sur formulaire pre-imprime (#50) : texte seul, sans cadres */}
+              <button onClick={(e) => { e.stopPropagation(); onCmrOverlay() }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80"
+                title="Imprimer uniquement le texte, pour un formulaire CMR pré-imprimé (FEBETRA)"
+                style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}>CMR pré-imprimé</button>
               <button onClick={(e) => { e.stopPropagation(); onSave() }} disabled={saving}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
                 style={{ backgroundColor: 'var(--color-primary)', color: '#fff', opacity: saving ? 0.5 : 1 }}>{saving ? '...' : t('common.save')}</button>

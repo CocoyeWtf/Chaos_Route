@@ -103,6 +103,10 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const [tempFilters, setTempFilters] = useState<Set<TemperatureClass>>(new Set())
   /* Filtre base d'origine (ticket #20) : différencier le lieu de départ des volumes SEC */
   const [baseFilters, setBaseFilters] = useState<Set<number>>(new Set())
+  /* Envoyer la tournée au « pot » plutôt que dans la journée affichée (#92).
+     Gaetan construit les tours Gosselies-MEA le vendredi de la S-1 et leur
+     donne leur date la semaine suivante. */
+  const [sendToPool, setSendToPool] = useState(false)
 
   /* Persistence localStorage des tailles / localStorage persistence for panel sizes */
   const outerLayout = useDefaultLayout({ id: 'tour-h' })
@@ -819,6 +823,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
         capacity_eqp: capacityEqp,
         base_id: effectiveBaseId ?? 0,
         status: 'DRAFT',
+        pooled: sendToPool,
         total_eqp: totalEqp,
         total_km: totalKm,
         is_pickup_tour: tourMode === 'pickup',
@@ -1833,6 +1838,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
             temperatureType={selectedTemperatureType}
             isPickupTour={tourMode === 'pickup'}
             baseId={effectiveBaseId}
+            sendToPool={sendToPool}
+            onSendToPoolChange={setSendToPool}
           />
           {saving && (
             <p className="text-xs text-center" style={{ color: 'var(--color-primary)' }}>

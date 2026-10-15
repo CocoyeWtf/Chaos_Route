@@ -68,6 +68,20 @@ class Tour(Base, TenantMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     date: Mapped[str] = mapped_column(String(10), nullable=False)  # YYYY-MM-DD
+    # Tournee construite a l'avance, en attente d'une date (#92).
+    #
+    # Gaetan : « les tours Gosselies-MEA sont faits le vendredi de la S-1. Lors
+    # de la creation des tours on dit a CMRO d'envoyer ces tours dans un "pot",
+    # et lorsqu'on planifie un jour X de la S-0 on integre un ou des tours a la
+    # bonne date. »
+    #
+    # La tournee garde une `date` — celle du jour ou elle a ete construite, pour
+    # ne pas rendre la colonne nullable et casser tout ce qui la lit — mais elle
+    # est tenue hors des listes du jour tant que ce drapeau est leve. En sortir
+    # consiste a lui donner sa vraie date. / Built ahead, awaiting a date.
+    pooled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False,
+    )
     code: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
     vehicle_type: Mapped[VehicleType | None] = mapped_column(Enum(VehicleType))
     capacity_eqp: Mapped[int | None] = mapped_column(Integer)

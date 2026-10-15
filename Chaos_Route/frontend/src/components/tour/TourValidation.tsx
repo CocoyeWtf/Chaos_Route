@@ -10,6 +10,10 @@ interface TourValidationProps {
   capacityEqp: number
   totalEqp: number
   onValidate: () => void
+  /* « Pot » des tournees construites a l'avance (#92). Facultatif : seuls les
+     ecrans qui construisent des tournees le proposent. */
+  sendToPool?: boolean
+  onSendToPoolChange?: (v: boolean) => void
   onReset: () => void
   temperatureType?: TemperatureType | null
   isPickupTour?: boolean
@@ -21,7 +25,7 @@ interface ValidationMessage {
   message: string
 }
 
-export function TourValidation({ stops, vehicleType, capacityEqp, totalEqp, onValidate, onReset, temperatureType, isPickupTour, baseId }: TourValidationProps) {
+export function TourValidation({ stops, vehicleType, capacityEqp, totalEqp, onValidate, onReset, temperatureType, isPickupTour, baseId, sendToPool, onSendToPoolChange }: TourValidationProps) {
   const { t } = useTranslation()
 
   const messages: ValidationMessage[] = []
@@ -108,17 +112,31 @@ export function TourValidation({ stops, vehicleType, capacityEqp, totalEqp, onVa
         })}
       </div>
 
+      {/* Envoyer au « pot » plutot que dans la journee affichee (#92).
+          Gaetan construit les tours Gosselies-MEA le vendredi de la S-1 et leur
+          donne leur date la semaine suivante ; sans cette case, ils
+          atterrissent dans la journee de construction et s'y perdent. */}
+      {onSendToPoolChange && (
+        <label className="px-4 pt-2 flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={!!sendToPool}
+            onChange={(e) => onSendToPoolChange(e.target.checked)} />
+          <span className="text-xs font-medium" style={{ color: sendToPool ? '#8b5cf6' : 'var(--text-secondary)' }}>
+            Envoyer au pot (sans date)
+          </span>
+        </label>
+      )}
+
       <div className="px-4 py-3 border-t flex gap-2" style={{ borderColor: 'var(--border-color)' }}>
         <button
           className="flex-1 px-4 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-40"
           style={{
-            backgroundColor: hasErrors ? 'var(--bg-tertiary)' : 'var(--color-primary)',
+            backgroundColor: hasErrors ? 'var(--bg-tertiary)' : (sendToPool ? '#8b5cf6' : 'var(--color-primary)'),
             color: hasErrors ? 'var(--text-muted)' : '#fff',
           }}
           disabled={hasErrors}
           onClick={onValidate}
         >
-          {t('tourPlanning.validation.saveDraft')}
+          {sendToPool ? 'Enregistrer au pot' : t('tourPlanning.validation.saveDraft')}
         </button>
         <button
           className="px-4 py-2 rounded-lg text-sm border transition-all hover:opacity-80"

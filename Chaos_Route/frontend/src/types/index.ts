@@ -238,6 +238,8 @@ export interface Tour {
   loader_name?: string
   trailer_number?: string
   dock_door_number?: string
+  /* Tournee construite a l'avance, en attente de date : le « pot » (#92). */
+  pooled?: boolean
   trailer_ready_time?: string
   /* Heure de mise a quai du ZUR, jalon distinct de la semi (#45, #46). */
   zur_ready_time?: string

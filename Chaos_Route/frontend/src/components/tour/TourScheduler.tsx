@@ -10,6 +10,7 @@ import { TourPrintPlan } from './TourPrintPlan'
 import { formatDuration, parseTime, formatTime, formatDate, DEFAULT_DOCK_TIME, DEFAULT_UNLOAD_PER_EQP } from '../../utils/tourTimeUtils'
 import { driverWorksOn, stopTemperatures } from '../../types'
 import { ChangeBaseDialog } from './ChangeBaseDialog'
+import { PooledToursPanel } from './PooledToursPanel'
 import { VEHICLE_TYPE_DEFAULTS, TEMPERATURE_TYPE_LABELS, TEMPERATURE_COLORS, TOUR_TYPE_LABELS } from '../../types'
 import api, { downloadPostierPlanning } from '../../services/api'
 import { CostBreakdown } from './CostBreakdown'
@@ -1607,6 +1608,8 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               alors que l'export est justement censé sortir les brouillons. Il ne
               dépend plus que de l'existence d'une tournée ce jour-là. /
               Moved out of the "has a scheduled tour" gate. */}
+          {/* Pot des tournées construites à l'avance (#92) */}
+          <PooledToursPanel bases={bases} targetDate={selectedDate} onScheduled={loadData} />
           {/* Corriger la base de départ de tournées déjà construites (#87) */}
           {tours.length > 0 && (
             <button

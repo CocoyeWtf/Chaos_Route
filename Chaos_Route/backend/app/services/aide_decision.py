@@ -13,7 +13,7 @@ from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.base_logistics import BaseLogistics
-from app.models.contract import Contract, TemperatureType, TailgateType
+from app.models.contract import Contract, TemperatureType, TailgateType, effective_vacation
 from app.models.contract_schedule import ContractSchedule
 from app.models.distance_matrix import DistanceMatrix
 from app.models.km_tax import KmTax
@@ -421,8 +421,12 @@ class AideDecisionService:
         else:
             for c_idx, c in enumerate(contract_list):
                 cap = c.capacity_eqp or DEFAULT_CAPACITY_EQP
-                # Coût fixe = fixed_daily_cost + vacation (partagé par nb_tours, géré par OR-Tools)
-                fixed_cents = int((float(c.fixed_daily_cost or 0) + float(c.vacation or 0)) * 100)
+                # Coût fixe = LA vacation, comptee une fois (#58). On additionnait
+                # ici « terme fixe » ET « vacation », deux colonnes portant la
+                # meme valeur : l'optimiseur surevaluait donc de 100 % le cout
+                # fixe de chaque contrat, et arbitrait sur des chiffres faux.
+                # Le correctif de septembre n'avait pas atteint ce fichier.
+                fixed_cents = int(effective_vacation(c) * 100)
                 if fixed_cents < 10000:
                     fixed_cents = 10000
 
@@ -637,8 +641,9 @@ class AideDecisionService:
 
                 # Coût — formule alignée historique/synthèse
                 nb_tours_for_contract = contract_tour_count[cid]
-                fixed = float(c.fixed_daily_cost or 0) / nb_tours_for_contract
-                vacation = float(c.vacation or 0) / nb_tours_for_contract
+                # Une seule vacation (#58) : `fixed` additionnait un doublon.
+                fixed = 0.0
+                vacation = effective_vacation(c) / nb_tours_for_contract
                 consumption = float(c.consumption_coefficient or 0)
                 km_rate = price_for_contract(fuel_prices, c) * consumption
                 # Fallback sur cost_per_km si fuel ou conso manquant
@@ -1345,7 +1350,7 @@ class AideDecisionService:
             fill_rate = total_eqp / cap if cap > 0 else 0
             nb_used = contract_tour_count.get(c.id, 0)
 
-            fixed = float(c.fixed_daily_cost or 0)
+            fixed = effective_vacation(c)
             km_cost_unit = float(c.cost_per_km or 0)
             if nb_used == 0:
                 marginal_cost = fixed + km_cost_unit * 100
@@ -1388,8 +1393,9 @@ class AideDecisionService:
             return 0.0
         c = selected_contract["contract"]
         nb_tours = contract_tour_count.get(c.id, 1) or 1
-        fixed = float(c.fixed_daily_cost or 0) / nb_tours
-        vacation = float(c.vacation or 0) / nb_tours
+        # Une seule vacation (#58).
+        fixed = 0.0
+        vacation = effective_vacation(c) / nb_tours
         consumption = float(c.consumption_coefficient or 0)
         km_rate = price_for_contract(fuel_prices, c) * consumption
         # Fallback sur cost_per_km si fuel ou conso manquant

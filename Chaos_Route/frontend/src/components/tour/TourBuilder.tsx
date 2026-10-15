@@ -177,9 +177,9 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
 
   const avgFixedCost = useMemo(() => {
     if (!selectedVehicleType || contracts.length === 0) return 0
-    const matching = contracts.filter((c) => c.vehicle_type === selectedVehicleType && c.fixed_daily_cost)
+    const matching = contracts.filter((c) => c.vehicle_type === selectedVehicleType && c.vacation)
     if (matching.length === 0) return 0
-    const sum = matching.reduce((acc, c) => acc + (c.fixed_daily_cost ?? 0), 0)
+    const sum = matching.reduce((acc, c) => acc + (c.vacation ?? 0), 0)
     return sum / matching.length
   }, [contracts, selectedVehicleType])
 

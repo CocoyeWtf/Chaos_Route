@@ -22,14 +22,8 @@ interface CostBreakdownData {
   contract?: {
     code: string
     transporter_name: string
-    fixed_daily_cost: number
     vacation: number
     consumption_coefficient: number
-  }
-  fixed_cost?: {
-    daily_cost: number
-    nb_tours_today: number
-    share: number
   }
   /* Contrat au forfait journalier — types occasionnel, journalier, base et
      intérim (#60). Le détail se résume alors au forfait divisé par le nombre de

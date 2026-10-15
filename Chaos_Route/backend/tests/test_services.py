@@ -23,7 +23,7 @@ def test_add_minutes():
 
 def test_tour_cost():
     cost = CostCalculatorService.calculate_tour_cost(
-        total_km=200, fixed_daily_cost=150, cost_per_km=1.2
+        total_km=200, vacation=150, cost_per_km=1.2
     )
     assert cost == 390.0
 

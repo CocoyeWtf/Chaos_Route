@@ -436,6 +436,7 @@ async def _migrate_column_types():
     Liste des conversions sures (pas de perte) :
     - volumes.eqp_count : integer -> numeric(10,2)
     - tour_stops.eqp_count : integer -> numeric(10,2)
+    - tours.eqp_loaded : integer -> numeric(10,2)  (demi-EQC, ticket #47)
 
     PostgreSQL uniquement. SQLite est typage faible et tolere les decimaux dans
     une colonne integer.
@@ -447,6 +448,7 @@ async def _migrate_column_types():
         ("volumes", "eqp_count", "numeric(10,2)"),
         ("tour_stops", "eqp_count", "numeric(10,2)"),
         ("tours", "total_eqp", "numeric(10,2)"),  # EQP fractionnaire (volumes injectes)
+        ("tours", "eqp_loaded", "numeric(10,2)"),  # EQC reellement charges, demi-EQC (#47)
     ]
 
     async with engine.begin() as conn:

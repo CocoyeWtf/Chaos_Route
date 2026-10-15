@@ -347,7 +347,7 @@ export default function Operations() {
       await api.put(`/tours/${tourId}/operations`, {
         ...f,
         total_weight_kg: f.total_weight_kg ? parseFloat(f.total_weight_kg) : null,
-        eqp_loaded: f.eqp_loaded ? parseInt(f.eqp_loaded, 10) : null,
+        eqp_loaded: f.eqp_loaded ? parseFloat(f.eqp_loaded) : null,  // demi-EQC acceptes (#47)
         trailer_ready_temp: f.trailer_ready_temp ? parseFloat(f.trailer_ready_temp) : null,
         loading_end_temp: f.loading_end_temp ? parseFloat(f.loading_end_temp) : null,
         vehicle_id: f.vehicle_id ? parseInt(f.vehicle_id, 10) : null,
@@ -1555,12 +1555,12 @@ function TourRow({
                     Final loaded EQC: was read-only and WMS-fed only. */}
                 <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>EQC chargés</label>
                 <input
-                  type="number" min={0} step={1}
+                  type="number" min={0} step={0.5}
                   value={form.eqp_loaded}
                   onChange={(e) => onFormChange('eqp_loaded', e.target.value)}
                   className="w-full min-w-0 px-1.5 py-1.5 rounded border text-xs"
                   style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                  title="Nombre d'EQC réellement chargés — pré-rempli par l'import WMS, corrigeable. Nombre entier."
+                  title="Nombre d'EQC réellement chargés — pré-rempli par l'import WMS, corrigeable. Les décimales sont acceptées (demi-EQC)."
                   onClick={(e) => e.stopPropagation()} />
               </div>
             </div>

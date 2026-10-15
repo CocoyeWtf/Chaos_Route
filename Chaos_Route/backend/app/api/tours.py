@@ -321,7 +321,7 @@ async def _calculate_cost(
     cost = 0.0
     warnings: list[str] = []
 
-    # 1. Terme fixe + vacation / nombre de tours du contrat ce jour
+    # 1. Vacation / nombre de tours du contrat ce jour
     # Arrondir chaque composant à 2 décimales (cohérent avec cost-breakdown)
     # Round each component to 2 decimals (consistent with cost-breakdown)
     nb_tours = await db.scalar(
@@ -673,7 +673,8 @@ async def available_contracts_for_tours(
             "vehicle_type": c.vehicle_type.value if (c.vehicle_type and hasattr(c.vehicle_type, 'value')) else c.vehicle_type,
             "capacity_eqp": c.capacity_eqp,
             "capacity_weight_kg": c.capacity_weight_kg,
-            "fixed_daily_cost": float(c.fixed_daily_cost) if c.fixed_daily_cost else None,
+            # Un seul terme fixe, nomme « vacation » (#58).
+            "vacation": effective_vacation(c) or None,
             "cost_per_km": float(c.cost_per_km) if c.cost_per_km else None,
             "cost_per_hour": float(c.cost_per_hour) if c.cost_per_hour else None,
             "has_tailgate": c.has_tailgate,
@@ -1233,11 +1234,10 @@ async def transporter_summary(
         base = bases_map.get(tour.base_id)
         total_km = float(tour.total_km or 0)
         nb_tours = nb_tours_map.get((contract.id, tour.date), 1)
-        # Une seule vacation (#58) : « terme fixe » et « vacation » sont le même
-        # montant. `fixed_share` reste exposé à 0 pour ne pas casser les
-        # consommateurs existants du détail de coût. /
-        # Single fixed term; `fixed_share` kept at 0 for backward compatibility.
-        fixed_share = 0.0
+        # Une seule vacation (#58). La cle `fixed_share`, qui restait exposee a
+        # 0 pour compatibilite, a ete retiree : elle affichait une colonne
+        # « Terme fixe » a 0,00 EUR dans le recapitulatif transporteur, ce qui
+        # entretenait le doublon que ce ticket demande d'effacer partout.
         vacation_share = round(effective_vacation(contract) / nb_tours, 2)
 
         fuel_price = price_for_contract(fuel_map.get(tour.date, {}), contract)
@@ -1263,7 +1263,7 @@ async def transporter_summary(
         km_tax_total = round(km_tax_total, 2)
         surcharges_for_tour = surcharges_map.get(tour.id, [])
         surcharges_total = sum(s["amount"] for s in surcharges_for_tour)
-        total_calculated = round(fixed_share + vacation_share + fuel_cost + km_tax_total + surcharges_total, 2)
+        total_calculated = round(vacation_share + fuel_cost + km_tax_total + surcharges_total, 2)
 
         sorted_stops = sorted(tour.stops, key=lambda s: s.sequence_order)
 
@@ -1313,7 +1313,6 @@ async def transporter_summary(
             "surcharges_total": round(surcharges_total, 2),
             "pending_surcharges_count": pending_surcharges_count.get(tour.id, 0),
             "cost_breakdown": {
-                "fixed_share": fixed_share,
                 "vacation_share": vacation_share,
                 "fuel_cost": fuel_cost,
                 "km_tax_total": km_tax_total,
@@ -1375,7 +1374,6 @@ async def transporter_summary(
         grand_km = 0.0
         grand_eqp = 0
         grand_duration = 0
-        grand_fixed = 0.0
         grand_vacation = 0.0
         grand_fuel = 0.0
         grand_km_tax = 0.0
@@ -1389,7 +1387,6 @@ async def transporter_summary(
             sub_km = sum(t["total_km"] for t in c_tours)
             sub_eqp = sum(t["total_eqp"] for t in c_tours)
             sub_duration = sum(t["total_duration_minutes"] for t in c_tours)
-            sub_fixed = sum(t["cost_breakdown"]["fixed_share"] for t in c_tours)
             sub_vacation = sum(t["cost_breakdown"]["vacation_share"] for t in c_tours)
             sub_fuel = sum(t["cost_breakdown"]["fuel_cost"] for t in c_tours)
             sub_km_tax = sum(t["cost_breakdown"]["km_tax_total"] for t in c_tours)
@@ -1413,7 +1410,6 @@ async def transporter_summary(
                     "total_km": round(sub_km, 2),
                     "total_eqp": sub_eqp,
                     "total_duration_minutes": sub_duration,
-                    "fixed_cost_total": round(sub_fixed, 2),
                     "vacation_cost_total": round(sub_vacation, 2),
                     "fuel_cost_total": round(sub_fuel, 2),
                     "km_tax_total": round(sub_km_tax, 2),
@@ -1426,7 +1422,6 @@ async def transporter_summary(
             grand_km += sub_km
             grand_eqp += sub_eqp
             grand_duration += sub_duration
-            grand_fixed += sub_fixed
             grand_vacation += sub_vacation
             grand_fuel += sub_fuel
             grand_km_tax += sub_km_tax
@@ -1446,7 +1441,6 @@ async def transporter_summary(
                 "total_km": round(grand_km, 2),
                 "total_eqp": grand_eqp,
                 "total_duration_minutes": grand_duration,
-                "fixed_cost_total": round(grand_fixed, 2),
                 "vacation_cost_total": round(grand_vacation, 2),
                 "fuel_cost_total": round(grand_fuel, 2),
                 "km_tax_total": round(grand_km_tax, 2),
@@ -2136,7 +2130,7 @@ async def create_tour(
                     vol.tour_id = tour.id
                     remaining -= vol_eqp
 
-    # Recalculer les tours frères (terme fixe réparti) / Recalculate sibling tours (shared fixed cost)
+    # Recalculer les tours frères (vacation répartie) / Recalculate siblings (shared vacation)
     if data.contract_id:
         await _recalculate_sibling_tours(db, data.contract_id, data.date)
 
@@ -3032,7 +3026,7 @@ async def get_tour_cost_breakdown(
 
     total_km = float(tour.total_km or 0)
 
-    # 1. Terme fixe + vacation / Fixed cost + vacation share
+    # 1. Vacation, repartie sur les tournees du jour / Vacation share
     nb_tours = await db.scalar(
         select(func.count(Tour.id)).where(
             Tour.contract_id == contract.id,
@@ -3040,8 +3034,6 @@ async def get_tour_cost_breakdown(
         )
     ) or 1
     # Une seule vacation (#58) — voir effective_vacation. / Single fixed term.
-    fixed_daily = 0.0
-    fixed_share = 0.0
     vacation_daily = effective_vacation(contract)
     vacation_share = round(vacation_daily / nb_tours, 2)
 
@@ -3155,7 +3147,7 @@ async def get_tour_cost_breakdown(
 
     km_tax_total = round(km_tax_total, 2)
     total_calculated = round(
-        fixed_share + vacation_share + km_term + trailer_term + fuel_cost + km_tax_total, 2)
+        vacation_share + km_term + trailer_term + fuel_cost + km_tax_total, 2)
 
     return {
         "tour_id": tour.id,
@@ -3168,14 +3160,8 @@ async def get_tour_cost_breakdown(
         "contract": {
             "code": contract.code,
             "transporter_name": contract.transporter_name,
-            "fixed_daily_cost": fixed_daily,
             "vacation": vacation_daily,
             "consumption_coefficient": consumption,
-        },
-        "fixed_cost": {
-            "daily_cost": fixed_daily,
-            "nb_tours_today": nb_tours,
-            "share": fixed_share,
         },
         "vacation_cost": {
             "daily_cost": vacation_daily,

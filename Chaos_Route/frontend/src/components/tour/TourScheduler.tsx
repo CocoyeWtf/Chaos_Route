@@ -873,20 +873,6 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     }
   }
 
-  /* Valider un tour / Validate a tour */
-  const handleValidate = async (tourId: number) => {
-    setScheduling(tourId)
-    try {
-      await api.put(`/tours/${tourId}/validate`)
-      await loadData()
-    } catch (e: unknown) {
-      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      alert(detail || 'Erreur validation')
-    } finally {
-      setScheduling(null)
-    }
-  }
-
   /* Annuler un tour (supprimer + libérer volumes) / Cancel a tour (delete + release volumes) */
   const handleCancel = async (tourId: number) => {
     if (!confirm('Annuler ce tour ? Les volumes seront libérés et le tour supprimé.')) return
@@ -937,6 +923,29 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   }
 
   /* Nombre de tours DRAFT planifiés / Count of scheduled DRAFT tours */
+  /* Chauffeurs ordonnés pour une journée donnée (#33, #95).
+
+     Deux règles, et la seconde vient du retour de Samuel : « les chauffeurs
+     peuvent travailler les samedis et le dimanche même si c'est rare ». Un
+     samedi, aucun chauffeur n'a ce jour dans son régime : signaler tout le
+     monde reviendrait à signaler personne, et le repère perdrait son sens
+     précisément le jour où l'on improvise. On ne signale donc que lorsqu'une
+     PARTIE de l'équipe travaille ce jour-là — c'est le seul cas où l'avertissement
+     distingue quelque chose. / Only flag when the day is a normal working day
+     for part of the team. */
+  const driversForDay = useCallback((isoDate: string) => {
+    const avecRegime = baseDrivers.map((d) => ({
+      driver: d,
+      dispo: driverWorksOn(d.work_days, isoDate),
+    }))
+    const journeeOuverte = avecRegime.some((x) => x.dispo)
+    return avecRegime
+      .map((x) => ({ ...x, signaler: journeeOuverte && !x.dispo }))
+      .sort((a, b) => (Number(b.dispo) - Number(a.dispo))
+        || `${a.driver.last_name} ${a.driver.first_name}`
+          .localeCompare(`${b.driver.last_name} ${b.driver.first_name}`, 'fr'))
+  }, [baseDrivers])
+
   const draftScheduledCount = useMemo(
     () => scheduledTours.filter((t) => t.status === 'DRAFT').length,
     [scheduledTours]
@@ -1573,6 +1582,27 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
             <span style={{ color: 'var(--text-muted)' }}>Planifiés</span>
             <span className="text-base font-bold" style={{ color: 'var(--color-success)' }}>{scheduledTours.length}</span>
           </div>
+          {/* Export Excel — HORS du bloc « au moins un tour ordonnancé » (#78).
+              Tout ce bloc d'actions était conditionné à `scheduledTours.length > 0`,
+              c'est-à-dire à au moins une tournée portant une heure de départ. Le
+              bouton n'apparaissait donc qu'une fois un transporteur attribué,
+              alors que l'export est justement censé sortir les brouillons. Il ne
+              dépend plus que de l'existence d'une tournée ce jour-là. /
+              Moved out of the "has a scheduled tour" gate. */}
+          {tours.length > 0 && (
+            <button
+              onClick={handleExportPlanning}
+              disabled={exportingPlanning}
+              className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80 disabled:opacity-40"
+              style={{ borderColor: 'var(--color-success)', color: 'var(--color-success)' }}
+              title={baseFilter === 'ALL'
+                ? "Export Excel de toutes les tournées construites ce jour, ordonnancées ou non — toutes bases d'origine"
+                : "Export Excel de toutes les tournées construites ce jour, ordonnancées ou non — base d'origine sélectionnée"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              {exportingPlanning ? '...' : 'Export Excel'}
+            </button>
+          )}
           {scheduledTours.length > 0 && (
             <>
               {draftScheduledCount > 0 && (
@@ -1613,18 +1643,6 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 {exportingWms ? '...' : 'WMS'}
-              </button>
-              <button
-                onClick={handleExportPlanning}
-                disabled={exportingPlanning}
-                className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg text-xs font-semibold border transition-all hover:opacity-80 disabled:opacity-40"
-                style={{ borderColor: 'var(--color-success)', color: 'var(--color-success)' }}
-                title={baseFilter === 'ALL'
-                  ? "Export Excel du planning ordonnancé (feuille Tours / Tournées ERT) — toutes bases d'origine"
-                  : "Export Excel du planning ordonnancé (feuille Tours / Tournées ERT) — base d'origine sélectionnée"}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                {exportingPlanning ? '...' : 'Export Excel'}
               </button>
               <button
                 onClick={() => numbersInputRef.current?.click()}
@@ -2285,19 +2303,17 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                                 {/* Régime 4/5 (#33) : un chauffeur qui ne travaille
                                     pas ce jour-là reste sélectionnable — un
                                     remplacement reste possible — mais il est
-                                    signalé, et repoussé en fin de liste. /
-                                    Part-time drivers are flagged, not hidden. */}
-                                {[...baseDrivers]
-                                  .sort((a, b) => Number(driverWorksOn(b.work_days, input.deliveryDate || selectedDate))
-                                    - Number(driverWorksOn(a.work_days, input.deliveryDate || selectedDate)))
-                                  .map((d) => {
-                                    const dispo = driverWorksOn(d.work_days, input.deliveryDate || selectedDate)
-                                    return (
-                                      <option key={d.id} value={`${d.last_name} ${d.first_name}`}>
-                                        {d.last_name} {d.first_name}{dispo ? '' : ' — ne travaille pas ce jour'}
-                                      </option>
-                                    )
-                                  })}
+                                    signalé, et repoussé en fin de liste.
+                                    À régime égal, tri alphabétique (#95) : la
+                                    liste sortait dans l'ordre de la base, donc
+                                    illisible dès qu'elle dépasse quelques noms. */}
+                                {driversForDay(input.deliveryDate || selectedDate)
+                                  .map(({ driver: d, dispo, signaler }) => (
+                                    <option key={d.id} value={`${d.last_name} ${d.first_name}`}>
+                                      {d.last_name} {d.first_name}{signaler ? ' — ne travaille pas ce jour' : ''}
+                                      {dispo ? '' : ''}
+                                    </option>
+                                  ))}
                               </select>
                             </>
                           )}
@@ -2591,16 +2607,16 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                                 Modifier
                               </button>
                             )}
-                            {tour.status === 'DRAFT' ? (
-                              <button
-                                className="w-full px-1 py-0.5 rounded text-[10px] font-semibold border transition-all hover:opacity-80"
-                                style={{ borderColor: 'var(--color-success)', color: 'var(--color-success)' }}
-                                disabled={scheduling === tour.id}
-                                onClick={(e) => { e.stopPropagation(); handleValidate(tour.id) }}
-                              >
-                                {scheduling === tour.id ? '...' : 'Valider'}
-                              </button>
-                            ) : (
+                            {/* Plus de « Valider » par tournée (#97). Il voisinait
+                                « Modifier », « Retirer » et « Annuler » dans une
+                                grille de boutons de 10 px : un clic de travers
+                                validait une tournée. Et il ne servait pas le geste
+                                réel — on ne valide que lorsque TOUTES les tournées
+                                sont planifiées, ce que fait le bouton « Valider (n) »
+                                de la barre du haut. « Défaire » reste, lui : c'est le
+                                rattrapage d'une validation, et il n'a pas de jumeau
+                                en haut d'écran. / Per-tour Validate removed. */}
+                            {tour.status !== 'DRAFT' && (
                               <button
                                 className="w-full px-1 py-0.5 rounded text-[10px] border transition-all hover:opacity-80"
                                 style={{ borderColor: 'var(--color-warning)', color: 'var(--color-warning)' }}
@@ -2652,7 +2668,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                         {!isScheduled && selectedContract && (
                           <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                             {selectedContract.transporter_name} — {selectedContract.vehicle_code ?? selectedContract.code}
-                            {selectedContract.fixed_daily_cost != null && ` | ${selectedContract.fixed_daily_cost}€/j`}
+                            {selectedContract.vacation != null && ` | ${selectedContract.vacation}€/j`}
                             {selectedContract.cost_per_km != null && ` + ${selectedContract.cost_per_km}€/km`}
                           </div>
                         )}

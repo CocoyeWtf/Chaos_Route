@@ -112,7 +112,7 @@ class TourBase(BaseModel):
     trailer_number: str | None = None
     dock_door_number: str | None = None
     trailer_ready_time: str | None = None
-    eqp_loaded: int | None = None
+    eqp_loaded: float | None = None
     departure_signal_time: str | None = None
     wms_tour_code: str | None = None
     trailer_ready_temp: float | None = None
@@ -167,7 +167,7 @@ class TourUpdate(BaseModel):
     trailer_number: str | None = None
     dock_door_number: str | None = None
     trailer_ready_time: str | None = None
-    eqp_loaded: int | None = None
+    eqp_loaded: float | None = None
     departure_signal_time: str | None = None
     trailer_ready_temp: float | None = None
     loading_end_temp: float | None = None
@@ -190,7 +190,7 @@ class TourOperationsUpdate(BaseModel):
     trailer_number: str | None = None
     dock_door_number: str | None = None
     trailer_ready_time: str | None = None
-    eqp_loaded: int | None = None
+    eqp_loaded: float | None = None
     departure_signal_time: str | None = None
     trailer_ready_temp: float | None = None
     loading_end_temp: float | None = None

@@ -80,10 +80,10 @@ export default function ContractManagement() {
     { key: 'capacity_eqp' as keyof Contract, label: t('contracts.capacity'), width: '80px' },
     {
       /* Un seul montant (#58) : « terme fixe » et « vacation » désignaient la
-         même chose et portaient la même valeur dans tous les contrats. On garde
-         le vocabulaire de l'exploitation — vacation — et le serveur tient les
-         deux colonnes égales pour l'extraction de pré-facturation. /
-         One amount: "fixed term" and "vacation" were the same thing. */
+         même chose et portaient la même valeur dans les 79 contrats. Le
+         vocabulaire de l'exploitation — vacation — est le seul qui subsiste,
+         y compris dans l'extraction de pré-facturation. /
+         One amount: the twin "fixed term" column was dropped. */
       key: 'vacation' as keyof Contract, label: 'Vacation', width: '100px',
       render: (row) => row.vacation != null ? `${row.vacation} €` : '—',
     },
@@ -145,9 +145,9 @@ export default function ContractManagement() {
       helperText: 'Detemine le prix carburant applique (gasoil €/L ou gaz €/kg).',
     },
     // Couts
-    /* Un seul champ de saisie (#58). Le serveur recopie la valeur dans l'ancien
-       champ « terme fixe », que lit l'extraction de pré-facturation. */
-    { key: 'vacation', label: 'Vacation (terme fixe)', type: 'number', step: 0.01 },
+    /* Un seul champ de saisie (#58) : la colonne jumelle « terme fixe » a été
+       supprimée du modèle et de la base, la vacation est la seule vérité. */
+    { key: 'vacation', label: 'Vacation', type: 'number', step: 0.01 },
     { key: 'cost_per_km', label: t('contracts.costPerKm'), type: 'number', step: 0.0001 },
     { key: 'cost_per_hour', label: t('contracts.costPerHour'), type: 'number', step: 0.01 },
     // Barème pré-facturation CMRO

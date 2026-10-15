@@ -12,17 +12,17 @@ class CostCalculatorService:
     @staticmethod
     def calculate_tour_cost(
         total_km: float,
-        fixed_daily_cost: float,
+        vacation: float,
         cost_per_km: float,
         cost_per_hour: float | None = None,
         total_hours: float | None = None,
     ) -> float:
         """
         Calculer le coût d'un tour / Calculate tour cost.
-        Règle: 1 terme fixe par jour par transporteur (même si multi-tours).
-        Rule: 1 fixed cost per day per transporter (even if multi-tours).
+        Règle: 1 vacation par jour par transporteur (même si multi-tours) (#58).
+        Rule: 1 vacation per day per transporter (even if multi-tours).
         """
-        cost = fixed_daily_cost + (total_km * cost_per_km)
+        cost = vacation + (total_km * cost_per_km)
         if cost_per_hour and total_hours:
             cost += total_hours * cost_per_hour
         return round(cost, 2)

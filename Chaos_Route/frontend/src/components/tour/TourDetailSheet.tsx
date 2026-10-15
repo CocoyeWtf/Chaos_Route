@@ -23,7 +23,6 @@ interface TourStop {
 }
 
 interface CostBreakdown {
-  fixed_share: number
   fuel_cost: number
   km_tax_total: number
   surcharges_total?: number
@@ -301,7 +300,6 @@ export function TourDetailSheet({ tour, onClose, onSurchargesChanged }: TourDeta
             {t('transporterSummary.costBreakdown')}
           </h3>
           <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-            <InfoRow label={t('transporterSummary.fixedShare')} value={`${tour.cost_breakdown.fixed_share.toFixed(2)} \u20AC`} />
             <InfoRow label={t('transporterSummary.fuelCost')} value={`${tour.cost_breakdown.fuel_cost.toFixed(2)} \u20AC`} />
             <InfoRow label={t('transporterSummary.kmTax')} value={`${tour.cost_breakdown.km_tax_total.toFixed(2)} \u20AC`} />
             {validatedTotal > 0 && (

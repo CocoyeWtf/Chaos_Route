@@ -109,7 +109,7 @@ def _coerce_value(val, field_name: str):
             return s
 
     float_fields = {"latitude", "longitude", "fixed_cost", "cost_per_km", "cost_per_hour",
-                    "fixed_daily_cost", "min_hours_per_day", "min_km_per_day", "consumption_coefficient",
+                    "min_hours_per_day", "min_km_per_day", "consumption_coefficient",
                     "weight_kg", "volume_m3", "distance_km", "total_km", "total_cost", "tax_per_km",
                     "sas_sec_surface_m2", "sas_frais_surface_m2", "sas_gel_surface_m2",
                     "eqp_count"}

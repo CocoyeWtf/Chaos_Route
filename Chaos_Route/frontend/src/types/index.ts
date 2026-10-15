@@ -452,7 +452,7 @@ export const TICKET_PRIORITY_LABELS: Record<TicketPriority, string> = {
 
 export const VEHICLE_TYPE_DEFAULTS: Record<VehicleType, { label: string; capacity_eqp: number }> = {
   SEMI: { label: 'Semi-remorque', capacity_eqp: 54 },
-  SEMI_COURTE: { label: 'Semi courte', capacity_eqp: 44 },
+  SEMI_COURTE: { label: 'Semi courte', capacity_eqp: 42 },  // valeur donnee par Samuel (#65)
   PORTEUR: { label: 'Porteur', capacity_eqp: 33 },
   PORTEUR_SURBAISSE: { label: 'Porteur surbaissé', capacity_eqp: 33 },
   PORTEUR_REMORQUE: { label: 'Porteur + Remorque', capacity_eqp: 43 },
@@ -518,7 +518,6 @@ export interface Contract {
   id: number
   transporter_name: string
   code: string
-  fixed_daily_cost?: number
   vacation?: number
   cost_per_km?: number
   cost_per_hour?: number

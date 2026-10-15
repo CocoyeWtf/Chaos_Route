@@ -45,6 +45,11 @@ export default function VolumeManagement() {
     {
       key: 'eqp_count', label: t('volumes.eqpCount'), width: '90px',
       render: (row) => (Number(row.eqp_count) || 0).toFixed(2),
+      /* Total en pied de tableau, recalculé sur les lignes que les filtres
+         laissent passer (#91) : filtrer sur le 18/09 et la base de Villers doit
+         donner le total du 18/09 à Villers, pas celui de toute la base. */
+      total: (row) => Number(row.eqp_count) || 0,
+      formatTotal: (somme) => somme.toFixed(2),
     },
     {
       key: 'weight_kg', label: t('volumes.weightKg'), width: '100px',

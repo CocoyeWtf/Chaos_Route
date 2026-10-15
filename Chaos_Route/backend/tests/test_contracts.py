@@ -26,7 +26,6 @@ async def test_create_contract_minimal(client, test_region):
         "tailgate_type": None,
         "provides_tractor": False,
         "provides_trailer": False,
-        "fixed_daily_cost": None,
         "vacation": None,
         "cost_per_km": None,
         "cost_per_hour": None,

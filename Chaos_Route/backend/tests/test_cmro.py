@@ -23,7 +23,7 @@ def _tour(d: str, vehicle_type="SEMI"):
 
 def _contract(**over):
     base = dict(
-        fixed_daily_cost=400, cost_per_km=0.5, consumption_coefficient=0.3,
+        vacation=400, cost_per_km=0.5, consumption_coefficient=0.3,
         cost_per_hour=10, ha_cost=50, trailer_cost=65,
         prime_saturday=30, prime_sunday_holiday=60,
         billing_type=2, daily_cost=0, vehicle_type="SEMI",

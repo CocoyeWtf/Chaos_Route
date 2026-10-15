@@ -78,13 +78,13 @@ class Contract(Base, TenantMixin):
     # Contrat / Contract
     transporter_name: Mapped[str] = mapped_column(String(150), nullable=False)
     code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
-    # « Terme fixe » et « vacation » désignent la MÊME chose dans le métier
-    # (ticket #58) : les 74 contrats renseignés portaient d'ailleurs la même
-    # valeur dans les deux champs. Les deux colonnes subsistent — l'extraction
-    # de pré-facturation lit `fixed_daily_cost` — mais elles sont tenues
-    # synchronisées à l'écriture et ne comptent QU'UNE FOIS dans le coût.
-    # / Same business notion; kept in sync, counted once.
-    fixed_daily_cost: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    # « Vacation » est le SEUL terme fixe (ticket #58). La colonne jumelle
+    # `fixed_daily_cost` a d'abord ete conservee et tenue synchronisee ; Samuel
+    # a demande sa suppression complete, parce qu'un second champ portant la
+    # meme notion finit toujours par diverger et par fausser la facturation.
+    # Elle est retiree du modele ET de la base : les 79 contrats portaient
+    # exactement la meme valeur dans les deux, la bascule est donc sans perte.
+    # / Single fixed term; the twin column was dropped, values were identical.
     vacation: Mapped[float | None] = mapped_column(Numeric(10, 2))
     cost_per_km: Mapped[float | None] = mapped_column(Numeric(10, 4))
     cost_per_hour: Mapped[float | None] = mapped_column(Numeric(10, 2))
@@ -172,16 +172,15 @@ def effective_trailer_supply(contract) -> TrailerSupply | None:
 
 
 def effective_vacation(contract) -> float:
-    """Montant de la vacation (ex-« terme fixe ») d'un contrat, compté UNE fois.
+    """Montant de la vacation d'un contrat, compté UNE fois (ticket #58).
 
     Le coût des tournées additionnait `fixed_daily_cost` ET `vacation`, alors que
-    les deux champs portent la même valeur : le terme fixe était donc compté deux
+    les deux champs portaient la même valeur : le terme fixe était compté deux
     fois — 394 085 EUR sur 819 305 EUR pour le seul mois de septembre. La
-    pré-facturation CMRO, elle, n'en comptait déjà qu'un seul (ticket #58).
-    / Single fixed term: the tour cost used to add both columns.
+    pré-facturation CMRO, elle, n'en comptait déjà qu'un seul.
+
+    Le helper subsiste après la suppression du doublon : il reste le point de
+    passage unique par lequel lire le terme fixe, et ce qu'on y lisait a deja
+    coute assez cher pour meriter un seul endroit. / Single read point.
     """
-    for champ in ("fixed_daily_cost", "vacation"):
-        valeur = getattr(contract, champ, None)
-        if valeur:
-            return float(valeur)
-    return 0.0
+    return float(contract.vacation or 0)

@@ -13,6 +13,7 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
+from app.models.contract import effective_vacation
 from app.utils.holidays_be import is_belgian_holiday
 
 # En-têtes exacts du modèle (Tour_ERT) / Exact model headers
@@ -141,7 +142,7 @@ def compute_cost(tour, contract, nb_tours: int, fuel_price: float, km_tax_total:
 
     # Type 2 (tractionnaire sous contrat) : barème complet
     km = float(tour.total_km or 0)
-    t_fixe = round(float(contract.fixed_daily_cost or 0) / nb, 2)          # vacation = fixe ÷ nb
+    t_fixe = round(effective_vacation(contract) / nb, 2)                   # vacation ÷ nb de tournées
     # Remorque ÷ nb — SEULEMENT si le transporteur amène la sienne (presté).
     # En mixte c'est NOTRE remorque (tour.vehicle_id renseigne) : ne pas
     # facturer t_rem, cf. ticket #41. / Trailer fee only when the carrier

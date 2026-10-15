@@ -144,7 +144,10 @@ class Tour(Base, TenantMixin):
     trailer_number: Mapped[str | None] = mapped_column(String(30))
     dock_door_number: Mapped[str | None] = mapped_column(String(10))
     trailer_ready_time: Mapped[str | None] = mapped_column(String(16))
-    eqp_loaded: Mapped[int | None] = mapped_column(Integer)
+    # EQC reellement charges. Passe de entier a decimal (#47) : le postier
+    # charge des demi-EQC et saisissait 12 pour 12,5. La colonne est migree en
+    # numeric(10,2) au demarrage par `_migrate_column_types`. / Decimal EQC.
+    eqp_loaded: Mapped[float | None] = mapped_column(Numeric(10, 2))
     departure_signal_time: Mapped[str | None] = mapped_column(String(16))
     wms_tour_code: Mapped[str | None] = mapped_column(String(30))
 

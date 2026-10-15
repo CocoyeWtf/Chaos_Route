@@ -26,6 +26,14 @@ export interface Column<T> {
       transporteur lisent tous deux contract_id). / Filter identity when two
       columns share a key. */
   filterId?: string
+  /** Sommer cette colonne en pied de tableau, sur les lignes RETENUES par les
+      filtres (#91). Opt-in : sommer un identifiant ou une année n'aurait pas de
+      sens, et la plupart des tableaux n'ont rien à totaliser. La fonction donne
+      la valeur numérique d'une ligne ; le formatage du total est à part pour
+      que « 1 234,56 EQC » reste lisible. / Opt-in column total over filtered rows. */
+  total?: (row: T) => number
+  /** Mise en forme du total de cette colonne / Formatting of that column's total. */
+  formatTotal?: (sum: number) => string
 }
 
 interface DataTableProps<T extends { id: number }> {
@@ -228,6 +236,12 @@ export function DataTable<T extends { id: number }>({
     return result
   }, [data, search, searchKeys, colFilters, columns, filterTextOf])
 
+  /* Totaux de colonnes (#91) / Column totals */
+  const columnsWithTotal = useMemo(
+    () => visibleColumns.filter((c) => typeof c.total === 'function'),
+    [visibleColumns],
+  )
+
   /* Tri / Sorting */
   const sorted = useMemo(() => {
     if (!sortKey) return filtered
@@ -240,6 +254,16 @@ export function DataTable<T extends { id: number }>({
       return sortDir === 'asc' ? cmp : -cmp
     })
   }, [filtered, sortKey, sortDir])
+
+  const totalsByColumn = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const col of columnsWithTotal) {
+      let somme = 0
+      for (const row of sorted) somme += col.total!(row) || 0
+      m.set(String(col.key), somme)
+    }
+    return m
+  }, [columnsWithTotal, sorted])
 
   /* Pagination */
   const totalPages = Math.ceil(sorted.length / pageSize)
@@ -655,6 +679,33 @@ export function DataTable<T extends { id: number }>({
                 })
               )}
             </tbody>
+            {/* Totaux de colonnes (#91) : calculés sur `sorted`, donc sur ce que
+                les filtres laissent passer — pas sur la page affichée, sinon le
+                total changerait en tournant les pages, ni sur `data`, sinon il
+                ignorerait le filtre de date que l'utilisateur vient de poser. /
+                Totals over the filtered rows, not the visible page. */}
+            {columnsWithTotal.length > 0 && sorted.length > 0 && (
+              <tfoot>
+                <tr style={{ borderTop: '2px solid var(--border-color)' }}>
+                  {onBulkDelete && <th className="px-2 py-2" />}
+                  {visibleColumns.map((col, i) => {
+                    const somme = totalsByColumn.get(String(col.key))
+                    return (
+                      <td
+                        key={String(col.key)}
+                        className="px-3 py-2 text-xs font-bold"
+                        style={{ color: somme != null ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                      >
+                        {somme != null
+                          ? (col.formatTotal ? col.formatTotal(somme) : String(Math.round(somme * 100) / 100))
+                          : (i === 0 ? `Total (${sorted.length})` : '')}
+                      </td>
+                    )
+                  })}
+                  <td />
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
 

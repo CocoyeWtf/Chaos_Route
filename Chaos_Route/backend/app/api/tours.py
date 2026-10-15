@@ -83,27 +83,36 @@ async def _get_distance(
     origin_type: str, origin_id: int,
     dest_type: str, dest_id: int,
 ) -> DistanceMatrix | None:
-    """Chercher distance dans le distancier (bidirectionnel) / Lookup distance (bidirectional)."""
-    result = await db.execute(
-        select(DistanceMatrix).where(
-            DistanceMatrix.origin_type == origin_type,
-            DistanceMatrix.origin_id == origin_id,
-            DistanceMatrix.destination_type == dest_type,
-            DistanceMatrix.destination_id == dest_id,
+    """Chercher distance dans le distancier (bidirectionnel) / Lookup distance (bidirectional).
+
+    `scalar_one_or_none()` jusqu'au #96 : la table n'a AUCUNE contrainte
+    d'unicite et l'import inserait a l'aveugle, donc deux imports du meme
+    fichier suffisaient a faire LEVER cette lecture — et avec elle tout calcul
+    de tournee touchant la paire. On prend desormais la premiere ligne, en
+    faisant passer les distances MESUREES avant les estimees (#96) : une vraie
+    valeur arrivee apres une estimation doit gagner immediatement, sans qu'il
+    faille aller supprimer l'estimation a la main.
+    / Tolerant of duplicates, and measured distances win over estimated ones.
+    """
+    for o_type, o_id, d_type, d_id in (
+        (origin_type, origin_id, dest_type, dest_id),
+        (dest_type, dest_id, origin_type, origin_id),
+    ):
+        result = await db.execute(
+            select(DistanceMatrix)
+            .where(
+                DistanceMatrix.origin_type == o_type,
+                DistanceMatrix.origin_id == o_id,
+                DistanceMatrix.destination_type == d_type,
+                DistanceMatrix.destination_id == d_id,
+            )
+            .order_by(DistanceMatrix.is_estimated.asc(), DistanceMatrix.id.desc())
+            .limit(1)
         )
-    )
-    entry = result.scalar_one_or_none()
-    if entry:
-        return entry
-    result = await db.execute(
-        select(DistanceMatrix).where(
-            DistanceMatrix.origin_type == dest_type,
-            DistanceMatrix.origin_id == dest_id,
-            DistanceMatrix.destination_type == origin_type,
-            DistanceMatrix.destination_id == origin_id,
-        )
-    )
-    return result.scalar_one_or_none()
+        entry = result.scalars().first()
+        if entry:
+            return entry
+    return None
 
 
 def _day_to_minutes(day_str: str | None) -> int:
@@ -2798,8 +2807,17 @@ async def update_tour_gate(
     changes = data.model_dump(exclude_unset=True)
     for key, value in changes.items():
         setattr(tour, key, value)
-    # Si barrier_entry_time renseigne et tour RETURNING → passer a COMPLETED / If barrier_entry_time set and tour RETURNING → transition to COMPLETED
-    if "barrier_entry_time" in changes and changes["barrier_entry_time"] and tour.status == TourStatus.RETURNING:
+    # Le camion est rentre : la tournee est close (#90).
+    #
+    # On ne cloturait que depuis RETURNING, c'est-a-dire a condition que le
+    # chauffeur ait appuye sur « retour base » AVANT que le garde ne pointe son
+    # entree. Dans le cas contraire la tournee restait IN_PROGRESS alors que le
+    # camion etait au parking, et le telephone pouvait encore la faire passer
+    # « en retour » apres coup. Le constat de la barriere suffit desormais,
+    # quel que soit l'ordre des deux gestes.
+    # / The guard's entry log closes the tour from IN_PROGRESS too.
+    if ("barrier_entry_time" in changes and changes["barrier_entry_time"]
+            and tour.status in (TourStatus.RETURNING, TourStatus.IN_PROGRESS)):
         tour.status = TourStatus.COMPLETED
         from app.api.ws_tracking import manager
         await manager.broadcast(tenant_id=tour.tenant_id, message={

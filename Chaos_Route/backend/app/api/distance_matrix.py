@@ -1,7 +1,7 @@
 """Routes Distancier enrichi / Enriched distance matrix API routes."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -136,14 +136,60 @@ async def lookup_distance(
     return entry
 
 
+async def _upsert_distance(db: AsyncSession, data: DistanceMatrixCreate) -> DistanceMatrix:
+    """Ecrire une distance SANS creer de doublon (#96).
+
+    La table n'a aucune contrainte d'unicite et ces routes inseraient a
+    l'aveugle : reimporter le meme fichier doublait les lignes, et la lecture
+    bidirectionnelle levait alors au lieu de repondre. On met donc a jour la
+    ligne existante — dans un sens comme dans l'autre, le distancier est
+    symetrique — plutot que d'en empiler une seconde.
+
+    Une valeur saisie ou importee est par definition MESUREE : elle efface le
+    drapeau « estimee » pose par `fill-missing`. C'est ce qui permet de combler
+    les trous aujourd'hui sans gener l'import du vrai distancier demain.
+    / Upsert: no duplicates, and an imported value clears the estimated flag.
+    """
+    existante = (await db.execute(
+        select(DistanceMatrix)
+        .where(
+            or_(
+                and_(
+                    DistanceMatrix.origin_type == data.origin_type,
+                    DistanceMatrix.origin_id == data.origin_id,
+                    DistanceMatrix.destination_type == data.destination_type,
+                    DistanceMatrix.destination_id == data.destination_id,
+                ),
+                and_(
+                    DistanceMatrix.origin_type == data.destination_type,
+                    DistanceMatrix.origin_id == data.destination_id,
+                    DistanceMatrix.destination_type == data.origin_type,
+                    DistanceMatrix.destination_id == data.origin_id,
+                ),
+            )
+        )
+        .order_by(DistanceMatrix.id.asc())
+        .limit(1)
+    )).scalars().first()
+
+    if existante is not None:
+        existante.distance_km = data.distance_km
+        existante.duration_minutes = data.duration_minutes
+        existante.is_estimated = False
+        return existante
+
+    entry = DistanceMatrix(**data.model_dump(), is_estimated=False)
+    db.add(entry)
+    return entry
+
+
 @router.post("/", response_model=DistanceMatrixRead, status_code=201)
 async def create_distance(
     data: DistanceMatrixCreate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("distances", "create")),
 ):
-    entry = DistanceMatrix(**data.model_dump())
-    db.add(entry)
+    entry = await _upsert_distance(db, data)
     await db.flush()
     await db.refresh(entry)
     return entry
@@ -158,9 +204,7 @@ async def create_distances_bulk(
     """Import en masse du distancier / Bulk import distance matrix entries."""
     entries = []
     for item in data:
-        entry = DistanceMatrix(**item.model_dump())
-        db.add(entry)
-        entries.append(entry)
+        entries.append(await _upsert_distance(db, item))
     await db.flush()
     for entry in entries:
         await db.refresh(entry)

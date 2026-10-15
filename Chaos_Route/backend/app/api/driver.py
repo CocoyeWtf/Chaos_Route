@@ -1037,6 +1037,18 @@ async def return_to_base(
     if not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
 
+    # Le poste de garde a deja constate le retour du camion (#90) : la tournee
+    # est close. Repasser en RETURNING la ferait reculer, et le postier voyait
+    # « en retour » une tournee que le garde avait pointee rentree — les deux
+    # ecrans se contredisaient. Le constat de la barriere prime sur le geste du
+    # chauffeur, qui arrive forcement apres. / The guard has already closed it.
+    if tour.status == TourStatus.COMPLETED:
+        return {
+            "status": "already_closed",
+            "tour_status": TourStatus.COMPLETED.value,
+            "message": "Le poste de garde a deja enregistre le retour de cette tournee.",
+        }
+
     tour.status = TourStatus.RETURNING
     tour.actual_return_time = data.timestamp
 

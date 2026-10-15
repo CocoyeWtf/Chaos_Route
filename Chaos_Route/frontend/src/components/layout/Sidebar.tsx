@@ -49,6 +49,7 @@ const navGroups: NavGroup[] = [
       { path: '/base-drivers', label: 'Chauffeurs base', icon: '🚛', resource: 'base-drivers' },
       { path: '/support-types', label: 'Types de support', icon: '📦', resource: 'support-types' },
       { path: '/base-support-rules', label: 'Regles support/base', icon: '🔒', resource: 'support-types' },
+      { path: '/pdv-support-rules', label: 'Supports visibles PDV', icon: '👁', resource: 'support-types' },
       { path: '/surcharge-types', label: 'Types de surcharge', icon: '🏷️', resource: 'surcharge-types' },
       { path: '/distances', label: 'nav.distances', icon: '📏', resource: 'distances' },
       { path: '/km-tax', label: 'nav.kmTax', icon: '💰', resource: 'distances' },

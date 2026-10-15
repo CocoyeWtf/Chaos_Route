@@ -2,7 +2,10 @@
 
    Workflow :
    1. Le responsable PDV se balade dans la cour avec sa tablette
-   2. Selectionne type de reprise + support + quantite + date dispo
+   2. Selectionne un type de reprise, puis touche le support a encoder :
+      une fenetre s'ouvre avec sa photo et tout ce qu'il y a a saisir (#105).
+      Avant, il fallait toucher le support en haut puis redescendre tout en
+      bas de l'ecran pour la quantite, la date et les notes.
    3. Soumet -> POST /pickup-requests/ (cree la demande + N etiquettes)
    4. Recupere les chaines ZPL/TSPL via /render-labels?protocol=XXX
    5. Imprime chaque etiquette en RAW sur l'imprimante Bluetooth portable
@@ -11,12 +14,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView,
+  View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Image,
   StyleSheet, Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import api from '../services/api'
-import { COLORS } from '../constants/config'
+import { API_BASE_URL, COLORS } from '../constants/config'
 import { supportMatchesPickupType } from '../constants/supportRules'
 import { useAuthStore } from '../stores/useAuthStore'
 import { useDeviceStore } from '../stores/useDeviceStore'
@@ -38,8 +41,20 @@ interface SupportType {
   code: string
   name: string
   unit_quantity: number
+  unit_label?: string | null
   is_combi?: boolean
   content_item_label?: string | null
+  image_path?: string | null
+  /* Masque par le back-office pour CE magasin (#105). Le serveur le marque au
+     lieu de le retirer : la palette support obligatoire des balles (#12) se
+     choisit parmi les codes PA, et un PDV qui masque ses palettes doit quand
+     meme pouvoir declarer une balle. / Hidden for this store, flagged not removed. */
+  hidden?: boolean
+}
+
+/* L'endpoint est public (sert les <img> du web) : pas de jeton a joindre. */
+function supportImageUrl(id: number): string {
+  return `${API_BASE_URL}/support-types/${id}/image`
 }
 
 interface RenderedLabel {
@@ -88,6 +103,8 @@ export default function PdvPickupScreen() {
 
   const [submitting, setSubmitting] = useState(false)
   const [progress, setProgress] = useState<string>('')
+  /* Fenetre d'encodage ouverte sur un support (#105) / Encoding sheet open. */
+  const [sheetOpen, setSheetOpen] = useState(false)
 
   useEffect(() => {
     loadPrinter()
@@ -120,7 +137,9 @@ export default function PdvPickupScreen() {
   // calquee sur le serveur. / The old prefix table omitted "PL".
   const filteredSupports = useMemo(() => {
     if (!pickupType) return []
-    return supportTypes.filter((st) => supportMatchesPickupType(st.code, pickupType))
+    return supportTypes.filter(
+      (st) => !st.hidden && supportMatchesPickupType(st.code, pickupType),
+    )
   }, [supportTypes, pickupType])
 
   const selectedSupport = supportTypes.find((st) => st.id === supportTypeId) || null
@@ -129,9 +148,18 @@ export default function PdvPickupScreen() {
   const showWithContent = pickupType === 'CONSIGNMENT' && !!selectedSupport?.content_item_label
   // Ticket #12 : palette support obligatoire pour les balles / Pallet mandatory for bales
   const showPalletSelect = pickupType === 'CARDBOARD'
-  const palletTypes = useMemo(() => supportTypes.filter((st) => st.code.startsWith('PA')), [supportTypes])
+  /* Le masquage par PDV (#105) s'applique ici aussi, mais avec un repli : si le
+     magasin a masque TOUTES ses palettes, on lui represente la liste complete
+     plutot que de lui interdire la declaration de balles, qui en exige une. /
+     Per-PDV hiding also applies here, with a fallback to the full list. */
+  const palletTypes = useMemo(() => {
+    const all = supportTypes.filter((st) => st.code.startsWith('PA'))
+    const visible = all.filter((st) => !st.hidden)
+    return visible.length > 0 ? visible : all
+  }, [supportTypes])
 
   const reset = useCallback(() => {
+    setSheetOpen(false)
     setPickupType('')
     setSupportTypeId(null)
     setPalletSupportTypeId(null)
@@ -140,6 +168,25 @@ export default function PdvPickupScreen() {
     setNotes('')
     setAvailabilityDate(tomorrowIso())
   }, [])
+
+  /* Ouvrir la fenetre sur un support. Les champs repartent a blanc a chaque
+     ouverture : apres une declaration de 12 palettes, enchainer sur 12 balles
+     par inadvertance serait trop facile. / Fields reset on each opening. */
+  const openSupport = useCallback((id: number) => {
+    setSupportTypeId(id)
+    setPalletSupportTypeId(null)
+    setQuantity('1')
+    setWithContent(false)
+    setNotes('')
+    setAvailabilityDate(tomorrowIso())
+    setSheetOpen(true)
+  }, [])
+
+  const closeSheet = useCallback(() => {
+    if (submitting) return  // ne pas fermer sous l'impression en cours
+    setSheetOpen(false)
+    setSupportTypeId(null)
+  }, [submitting])
 
   const submitAndPrint = useCallback(async () => {
     const qty = parseInt(quantity, 10)
@@ -351,23 +398,40 @@ export default function PdvPickupScreen() {
         ))}
       </View>
 
-      {/* Type de support / Support type */}
+      {/* Type de support / Support type.
+          Ticket #105 : toucher un support ouvre la fenetre d'encodage au lieu
+          de n'armer qu'une selection qu'il fallait aller completer tout en bas
+          de l'ecran. La liste ne garde donc ici que de quoi reconnaitre le
+          support. / Tapping a support now opens the encoding sheet. */}
       {needsSupport && (
         <>
           <Text style={styles.label}>Type de support</Text>
           {filteredSupports.length === 0 ? (
-            <Text style={styles.emptyHint}>Aucun support disponible pour ce type.</Text>
+            <Text style={styles.emptyHint}>
+              {supportTypes.some((st) => st.hidden && supportMatchesPickupType(st.code, pickupType as PickupType))
+                ? 'Aucun support affiche pour ce type. Les supports de ce magasin'
+                  + ' se reglent depuis le web (Referentiels > Supports visibles PDV).'
+                : 'Aucun support disponible pour ce type.'}
+            </Text>
           ) : (
             <View style={styles.supportList}>
               {filteredSupports.map((st) => (
                 <TouchableOpacity
                   key={st.id}
-                  onPress={() => setSupportTypeId(st.id)}
-                  style={[
-                    styles.supportRow,
-                    supportTypeId === st.id && styles.supportRowActive,
-                  ]}
+                  onPress={() => openSupport(st.id)}
+                  style={styles.supportRow}
                 >
+                  <View style={styles.supportThumbWrap}>
+                    {st.image_path ? (
+                      <Image
+                        source={{ uri: supportImageUrl(st.id) }}
+                        style={styles.supportThumb}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <Text style={styles.supportThumbEmpty}>{st.code.slice(0, 2)}</Text>
+                    )}
+                  </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.supportCode}>{st.code}</Text>
                     <Text style={styles.supportName}>{st.name}</Text>
@@ -377,129 +441,169 @@ export default function PdvPickupScreen() {
                       <Text style={styles.combiBadgeText}>COMBI</Text>
                     </View>
                   )}
+                  <Text style={styles.supportChevron}>›</Text>
                 </TouchableOpacity>
               ))}
             </View>
           )}
         </>
-      )}
-
-      {/* Bandeau info combi / Combi info banner */}
-      {isCombi && (
-        <View style={styles.combiInfoBanner}>
-          <Text style={styles.combiInfoTitle}>Declaration combi - stock absolu</Text>
-          <Text style={styles.combiInfoText}>
-            Saisissez le nombre TOTAL de combis dispo sur la base. Demain,
-            redeclarez le nouveau total. Le chauffeur reprendra ce qu&apos;il peut.
-          </Text>
-        </View>
-      )}
-
-      {/* Palette support obligatoire pour les balles (ticket #12) / Mandatory pallet for bales */}
-      {showPalletSelect && (
-        <>
-          <Text style={styles.label}>Palette support *</Text>
-          {palletTypes.length === 0 ? (
-            <Text style={styles.emptyHint}>Aucune palette disponible.</Text>
-          ) : (
-            <View style={styles.supportList}>
-              {palletTypes.map((pt) => (
-                <TouchableOpacity
-                  key={pt.id}
-                  onPress={() => setPalletSupportTypeId(pt.id)}
-                  style={[
-                    styles.supportRow,
-                    palletSupportTypeId === pt.id && styles.supportRowActive,
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.supportCode}>{pt.code}</Text>
-                    <Text style={styles.supportName}>{pt.name}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-        </>
-      )}
-
-      {/* Quantite / Quantity */}
-      {pickupType !== '' && (
-        <>
-          <Text style={styles.label}>
-            {isCombi ? 'Stock combi (absolu)' : 'Quantite'}
-          </Text>
-          <TextInput
-            value={quantity}
-            onChangeText={setQuantity}
-            keyboardType="number-pad"
-            style={styles.input}
-            placeholder="0"
-            placeholderTextColor={COLORS.textMuted}
-          />
-        </>
-      )}
-
-      {/* Date dispo / Availability date */}
-      {pickupType !== '' && (
-        <>
-          <Text style={styles.label}>Date de disponibilite (YYYY-MM-DD)</Text>
-          <TextInput
-            value={availabilityDate}
-            onChangeText={setAvailabilityDate}
-            style={styles.input}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={COLORS.textMuted}
-            autoCapitalize="none"
-          />
-        </>
-      )}
-
-      {/* With content (consignes) */}
-      {showWithContent && (
-        <TouchableOpacity
-          onPress={() => setWithContent((v) => !v)}
-          style={styles.checkboxRow}
-        >
-          <View style={[styles.checkbox, withContent && styles.checkboxChecked]} />
-          <Text style={styles.checkboxLabel}>
-            Avec {selectedSupport!.content_item_label}s
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Notes */}
-      {pickupType !== '' && (
-        <>
-          <Text style={styles.label}>Notes (optionnel)</Text>
-          <TextInput
-            value={notes}
-            onChangeText={setNotes}
-            style={styles.input}
-            placeholder="Informations complementaires..."
-            placeholderTextColor={COLORS.textMuted}
-          />
-        </>
-      )}
-
-      {/* Submit */}
-      {pickupType !== '' && (
-        <TouchableOpacity
-          onPress={submitAndPrint}
-          disabled={submitting}
-          style={[styles.submitBtn, submitting && { opacity: 0.5 }]}
-        >
-          {submitting ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <ActivityIndicator color={COLORS.white} size="small" />
-              <Text style={styles.submitText}>{progress || 'En cours...'}</Text>
-            </View>
-          ) : (
-            <Text style={styles.submitText}>Declarer et imprimer</Text>
-          )}
-        </TouchableOpacity>
       )}
     </ScrollView>
+
+    {/* Fenetre d'encodage / Encoding sheet (#105).
+        Tout ce qu'il y a a saisir tient dans cette fenetre, photo du support
+        comprise : plus d'aller-retour entre le haut et le bas de l'ecran. */}
+    <Modal
+      visible={sheetOpen}
+      animationType="slide"
+      transparent
+      onRequestClose={closeSheet}
+    >
+      <View style={styles.sheetBackdrop}>
+        <KeyboardAvoidingView
+          style={styles.sheetWrap}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.sheet}>
+            {/* En-tete : photo + identite du support */}
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetPhotoWrap}>
+                {selectedSupport?.image_path ? (
+                  <Image
+                    source={{ uri: supportImageUrl(selectedSupport.id) }}
+                    style={styles.sheetPhoto}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <Text style={styles.sheetPhotoEmpty}>Photo{'\n'}a venir</Text>
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetCode}>{selectedSupport?.code}</Text>
+                <Text style={styles.sheetName}>{selectedSupport?.name}</Text>
+                {selectedSupport?.unit_label ? (
+                  <Text style={styles.sheetUnit}>{selectedSupport.unit_label}</Text>
+                ) : null}
+              </View>
+              <TouchableOpacity onPress={closeSheet} hitSlop={12} style={styles.sheetClose}>
+                <Text style={styles.sheetCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.sheetBody}
+              contentContainerStyle={styles.sheetBodyContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
+            >
+              {/* Bandeau info combi / Combi info banner */}
+              {isCombi && (
+                <View style={styles.combiInfoBanner}>
+                  <Text style={styles.combiInfoTitle}>Declaration combi - stock absolu</Text>
+                  <Text style={styles.combiInfoText}>
+                    Saisissez le nombre TOTAL de combis dispo sur la base. Demain,
+                    redeclarez le nouveau total. Le chauffeur reprendra ce qu&apos;il peut.
+                  </Text>
+                </View>
+              )}
+
+              {/* Palette support obligatoire pour les balles (ticket #12) */}
+              {showPalletSelect && (
+                <>
+                  <Text style={styles.label}>Palette support *</Text>
+                  {palletTypes.length === 0 ? (
+                    <Text style={styles.emptyHint}>Aucune palette disponible.</Text>
+                  ) : (
+                    <View style={styles.supportList}>
+                      {palletTypes.map((pt) => (
+                        <TouchableOpacity
+                          key={pt.id}
+                          onPress={() => setPalletSupportTypeId(pt.id)}
+                          style={[
+                            styles.supportRow,
+                            palletSupportTypeId === pt.id && styles.supportRowActive,
+                          ]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.supportCode}>{pt.code}</Text>
+                            <Text style={styles.supportName}>{pt.name}</Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </>
+              )}
+
+              {/* Quantite / Quantity */}
+              <Text style={styles.label}>
+                {isCombi ? 'Stock combi (absolu)' : 'Quantite'}
+              </Text>
+              <TextInput
+                value={quantity}
+                onChangeText={setQuantity}
+                keyboardType="number-pad"
+                style={styles.input}
+                placeholder="0"
+                placeholderTextColor={COLORS.textMuted}
+              />
+
+              {/* Date dispo / Availability date */}
+              <Text style={styles.label}>Date de disponibilite (YYYY-MM-DD)</Text>
+              <TextInput
+                value={availabilityDate}
+                onChangeText={setAvailabilityDate}
+                style={styles.input}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor={COLORS.textMuted}
+                autoCapitalize="none"
+              />
+
+              {/* With content (consignes) */}
+              {showWithContent && (
+                <TouchableOpacity
+                  onPress={() => setWithContent((v) => !v)}
+                  style={styles.checkboxRow}
+                >
+                  <View style={[styles.checkbox, withContent && styles.checkboxChecked]} />
+                  <Text style={styles.checkboxLabel}>
+                    Avec {selectedSupport!.content_item_label}s
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Notes */}
+              <Text style={styles.label}>Notes (optionnel)</Text>
+              <TextInput
+                value={notes}
+                onChangeText={setNotes}
+                style={styles.input}
+                placeholder="Informations complementaires..."
+                placeholderTextColor={COLORS.textMuted}
+              />
+            </ScrollView>
+
+            {/* Submit, dans la fenetre comme demande au #105 */}
+            <View style={styles.sheetFooter}>
+              <TouchableOpacity
+                onPress={submitAndPrint}
+                disabled={submitting}
+                style={[styles.submitBtn, submitting && { opacity: 0.5 }]}
+              >
+                {submitting ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator color={COLORS.white} size="small" />
+                    <Text style={styles.submitText}>{progress || 'En cours...'}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.submitText}>Declarer et imprimer</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
     </KeyboardAvoidingView>
   )
 }
@@ -563,6 +667,14 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   supportRowActive: { borderColor: COLORS.primary, backgroundColor: 'rgba(249,115,22,0.08)' },
+  supportThumbWrap: {
+    width: 44, height: 44, borderRadius: 8, marginRight: 10,
+    backgroundColor: COLORS.bgTertiary,
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  supportThumb: { width: '100%', height: '100%' },
+  supportThumbEmpty: { color: COLORS.textMuted, fontSize: 11, fontWeight: '800' },
+  supportChevron: { color: COLORS.textMuted, fontSize: 22, marginLeft: 8 },
   supportCode: { color: COLORS.primary, fontWeight: '800', fontSize: 12 },
   supportName: { color: COLORS.textPrimary, fontSize: 13, marginTop: 2 },
   combiBadge: { backgroundColor: 'rgba(139,92,246,0.18)', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
@@ -603,9 +715,53 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: 8,  // le pied de la fenetre porte deja sa marge / sheet footer has padding
   },
   submitText: { color: COLORS.white, fontSize: 15, fontWeight: '800' },
 
   linkText: { color: COLORS.primary, fontSize: 12, fontWeight: '700' },
+
+  /* Fenetre d'encodage (#105) / Encoding sheet.
+     Fond translucide + feuille plafonnee a 88 % de la hauteur : sur une
+     tablette magasin, le clavier numerique mange deja la moitie de l'ecran. */
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' },
+  sheetWrap: { width: '100%' },
+  sheet: {
+    backgroundColor: COLORS.bgPrimary,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderTopWidth: 1,
+    borderColor: COLORS.border,
+    maxHeight: '88%',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  sheetPhotoWrap: {
+    width: 86, height: 86, borderRadius: 12,
+    backgroundColor: COLORS.bgSecondary,
+    borderWidth: 1, borderColor: COLORS.border,
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  sheetPhoto: { width: '100%', height: '100%' },
+  sheetPhotoEmpty: { color: COLORS.textMuted, fontSize: 11, textAlign: 'center', lineHeight: 15 },
+  sheetCode: { color: COLORS.primary, fontWeight: '800', fontSize: 14 },
+  sheetName: { color: COLORS.textPrimary, fontSize: 15, fontWeight: '700', marginTop: 2 },
+  sheetUnit: { color: COLORS.textMuted, fontSize: 11, marginTop: 3 },
+  sheetClose: { paddingHorizontal: 6, paddingVertical: 2 },
+  sheetCloseText: { color: COLORS.textMuted, fontSize: 20, fontWeight: '700' },
+  sheetBody: { flexGrow: 0 },
+  sheetBodyContent: { paddingHorizontal: 16, paddingBottom: 8 },
+  sheetFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
 })

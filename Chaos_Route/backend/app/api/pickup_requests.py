@@ -35,6 +35,7 @@ from app.api.deps import (
 from app.models.mobile_device import MobileDevice
 from app.utils.label_templates import LabelData, render as render_label
 from app.utils.support_rules import is_return_support_code
+from app.api.pdv_support_rules import hidden_support_ids
 
 router = APIRouter()
 
@@ -133,6 +134,15 @@ async def _pickup_form_data(db: AsyncSession, scope_pdv_id: int | None) -> dict:
     st_result = await db.execute(select(SupportType).where(SupportType.is_active == True).order_by(SupportType.code))
     support_types = [st for st in st_result.scalars().all() if is_return_support_code(st.code)]
 
+    # Ticket #105 : chaque magasin masque les supports qu'il ne retourne jamais
+    # (41 proposes, 16 reellement utilises au 01717). On ne retire pas les
+    # supports masques de la reponse, on les marque : l'app en a encore besoin
+    # pour la palette support obligatoire des balles (#12), dont le choix se
+    # fait parmi les codes PA. Les retirer ici empecherait un PDV qui masque ses
+    # palettes de declarer la moindre balle. / Hidden supports are flagged, not
+    # removed: the app still needs them for the mandatory bale pallet picker.
+    hidden = await hidden_support_ids(db, scope_pdv_id)
+
     pdv_query = select(PDV).order_by(PDV.code)
     if scope_pdv_id is not None:
         pdv_query = pdv_query.where(PDV.id == scope_pdv_id)
@@ -150,6 +160,7 @@ async def _pickup_form_data(db: AsyncSession, scope_pdv_id: int | None) -> dict:
                 "content_item_value": st.content_item_value,
                 "image_path": st.image_path,
                 "is_combi": st.is_combi,
+                "hidden": st.id in hidden,
             }
             for st in support_types
         ],

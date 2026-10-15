@@ -45,6 +45,7 @@ const Tracking = lazy(() => import('./pages/Tracking'))
 const SupportScanTrace = lazy(() => import('./pages/SupportScanTrace'))
 const SupportTypes = lazy(() => import('./pages/SupportTypes'))
 const BaseSupportRules = lazy(() => import('./pages/BaseSupportRules'))
+const PdvSupportRules = lazy(() => import('./pages/PdvSupportRules'))
 const PdvPickupRequests = lazy(() => import('./pages/PdvPickupRequests'))
 const PdvCrateRequests = lazy(() => import('./pages/PdvCrateRequests'))
 const CrateManagement = lazy(() => import('./pages/CrateManagement'))
@@ -135,6 +136,7 @@ export default function App() {
             <Route path="/support-scans" element={<SupportScanTrace />} />
             <Route path="/support-types" element={<SupportTypes />} />
             <Route path="/base-support-rules" element={<BaseSupportRules />} />
+            <Route path="/pdv-support-rules" element={<PdvSupportRules />} />
             <Route path="/pickup-requests" element={<PdvPickupRequests />} />
             <Route path="/crate-requests" element={<PdvCrateRequests />} />
             <Route path="/crate-management" element={<CrateManagement />} />

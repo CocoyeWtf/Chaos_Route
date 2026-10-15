@@ -80,6 +80,15 @@ export default function Operations() {
   const [pdvs, setPdvs] = useState<PDV[]>([])
   const [volumes, setVolumes] = useState<Volume[]>([])
   const [loading, setLoading] = useState(false)
+  /* Filtres avances (#100). Repliés par defaut : la barre du haut doit rester
+     lisible sur un ecran de poste. */
+  const [showFilters, setShowFilters] = useState(false)
+  const [fCode, setFCode] = useState('')
+  const [fVehicle, setFVehicle] = useState('')
+  const [fDriver, setFDriver] = useState('')
+  const [fPdv, setFPdv] = useState('')
+  const [fDeparture, setFDeparture] = useState('')
+  const [fLoading, setFLoading] = useState('')
   const [saving, setSaving] = useState<number | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [waybillTourId, setWaybillTourId] = useState<number | null>(null)
@@ -320,6 +329,52 @@ export default function Operations() {
     [tours],
   )
 
+  /* Filtrage (#100). Samuel demande de filtrer par numero de tournee, vehicule,
+     chauffeur, point de vente, heure de depart et etat du chargement.
+
+     Les cinq premiers sont des « contient » : on cherche un fragment de code,
+     pas une valeur exacte. L'etat du chargement, lui, est un vocabulaire ferme
+     de trois valeurs : liste deroulante et egalite stricte, comme les filtres
+     de l'historique (#17). Le PDV cherche dans TOUS les arrets de la tournee,
+     parce que c'est ainsi qu'on l'utilise : « quelle tournee passe au 01717 ? »
+     / Advanced filters over the day's tours. */
+  const loadingStateLabel = useCallback((tour: Tour): string => {
+    if (tour.loading_end_time) return 'Chargé'
+    if (tour.trailer_ready_time) return 'En cours'
+    return 'À charger'
+  }, [])
+
+  const filteredTours = useMemo(() => {
+    const contient = (valeur: string | null | undefined, q: string) =>
+      !q || (valeur ?? '').toLowerCase().includes(q.toLowerCase())
+    return toursWithDelay.filter((t) => {
+      if (!contient(t.code, fCode)) return false
+      if (fVehicle) {
+        /* Meme libelle que la colonne Vehicule, qui se lit sur le contrat. */
+        const c = t.contract_id ? contractMap.get(t.contract_id) : null
+        const libelle = c?.vehicle_code
+          ? `${c.vehicle_code} ${c.vehicle_name ?? ''}`
+          : (c?.code ?? '')
+        if (!contient(libelle, fVehicle)) return false
+      }
+      if (!contient(t.driver_name, fDriver)) return false
+      if (!contient(t.departure_time, fDeparture)) return false
+      if (fLoading && loadingStateLabel(t) !== fLoading) return false
+      if (fPdv) {
+        const q = fPdv.toLowerCase()
+        const touche = (t.stops ?? []).some((st) => {
+          const pdv = pdvMap.get(st.pdv_id)
+          return `${pdv?.code ?? ''} ${pdv?.name ?? ''}`.toLowerCase().includes(q)
+        })
+        if (!touche) return false
+      }
+      return true
+    })
+  }, [toursWithDelay, fCode, fVehicle, fDriver, fPdv, fDeparture, fLoading, pdvMap, contractMap, loadingStateLabel])
+
+  const nbFiltresActifs = [fCode, fVehicle, fDriver, fPdv, fDeparture, fLoading]
+    .filter((v) => v.length > 0).length
+
   const impacts: TourImpact[] = useMemo(
     () => detectSecondTourImpacts(toursWithDelay),
     [toursWithDelay],
@@ -525,7 +580,7 @@ export default function Operations() {
     const heights: number[] = []
     tbodies.forEach((tb) => heights.push(tb.getBoundingClientRect().height))
     setMeasuredRowHeights(heights)
-  }, [toursWithDelay, expandedId, visibleCols, prefs.colWidths])
+  }, [filteredTours, expandedId, visibleCols, prefs.colWidths])
 
   return (
     <div className="p-6">
@@ -691,6 +746,26 @@ export default function Operations() {
           </select>
         </div>
         <div className="flex items-end">
+          {/* Filtres avances (#100) */}
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className="px-3 py-2 rounded-lg border text-sm font-medium transition-colors hover:opacity-80 mr-2"
+            style={{
+              borderColor: showFilters ? 'var(--color-primary)' : 'var(--border-color)',
+              backgroundColor: showFilters ? 'rgba(249,115,22,0.1)' : 'var(--bg-secondary)',
+              color: showFilters ? 'var(--color-primary)' : 'var(--text-secondary)',
+            }}
+          >
+            {showFilters ? '▾' : '▸'} Filtres avancés
+            {nbFiltresActifs > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                style={{ backgroundColor: 'var(--color-primary)', color: '#fff' }}>
+                {nbFiltresActifs}
+              </span>
+            )}
+          </button>
+        </div>
+        <div className="flex items-end">
           <button
             onClick={handleExportPlanning}
             disabled={!baseId || exportingPlanning || tours.length === 0}
@@ -702,6 +777,62 @@ export default function Operations() {
           </button>
         </div>
       </div>
+
+      {/* Panneau des filtres avances (#100) */}
+      {showFilters && (
+        <div className="mb-5 p-3 rounded-xl border flex flex-wrap gap-3 items-end"
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+          {([
+            ['N° de tournée', fCode, setFCode],
+            ['Véhicule', fVehicle, setFVehicle],
+            ['Chauffeur', fDriver, setFDriver],
+            ['Point de vente', fPdv, setFPdv],
+            ['Heure de départ', fDeparture, setFDeparture],
+          ] as [string, string, (v: string) => void][]).map(([label, valeur, set]) => (
+            <div key={label}>
+              <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>
+                {label}
+              </label>
+              <input
+                value={valeur}
+                onChange={(e) => set(e.target.value)}
+                placeholder="…"
+                className="px-2 py-1.5 rounded-lg border text-sm"
+                style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', width: '150px' }}
+              />
+            </div>
+          ))}
+          <div>
+            {/* Vocabulaire ferme : liste deroulante et egalite stricte, comme
+                les filtres de l'historique (#17). */}
+            <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>
+              État du chargement
+            </label>
+            <select
+              value={fLoading}
+              onChange={(e) => setFLoading(e.target.value)}
+              className="px-2 py-1.5 rounded-lg border text-sm"
+              style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', width: '150px' }}
+            >
+              <option value="">Tous</option>
+              <option value="À charger">À charger</option>
+              <option value="En cours">En cours</option>
+              <option value="Chargé">Chargé</option>
+            </select>
+          </div>
+          <button
+            onClick={() => { setFCode(''); setFVehicle(''); setFDriver(''); setFPdv(''); setFDeparture(''); setFLoading('') }}
+            disabled={nbFiltresActifs === 0}
+            className="px-3 py-1.5 rounded-lg border text-xs disabled:opacity-40"
+            style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}
+          >
+            Effacer
+          </button>
+          <span className="text-xs ml-auto" style={{ color: 'var(--text-muted)' }}>
+            {filteredTours.length} / {toursWithDelay.length} tournée(s)
+          </span>
+        </div>
+      )}
 
       {/* Alertes impact 2e tour / Second tour impact alerts */}
       {impacts.map((imp, i) => (
@@ -756,7 +887,7 @@ export default function Operations() {
                       ))}
                     </tr>
                   </thead>
-                  {toursWithDelay.map((tour) => {
+                  {filteredTours.map((tour) => {
                     const contract = tour.contract_id ? contractMap.get(tour.contract_id) : null
                     const isExpanded = expandedId === tour.id
                     const form = forms[tour.id]
@@ -811,7 +942,7 @@ export default function Operations() {
           <div className="min-w-[200px]" style={{ width: `${100 - prefs.splitPct}%` }}>
             <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
               <TourGantt
-                tours={toursWithDelay}
+                tours={filteredTours}
                 activeTourId={expandedId}
                 onTourClick={(id) => toggleExpand(id)}
                 rowHeights={measuredRowHeights}

@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Volume, PDV, DistanceEntry, PdvPickupSummary, TemperatureClass } from '../../types'
-import { TEMPERATURE_COLORS } from '../../types'
+import { TEMPERATURE_COLORS, hasShortGelWindow } from '../../types'
 import { formatDate } from '../../utils/tourTimeUtils'
 
 /* Labels courts par type de reprise / Short labels per pickup type */
@@ -305,13 +305,13 @@ export function VolumePanel({
                     que l'AT sache qu'il replanifie de la marchandise non partie. */}
                 {/* Gel livrable de jour seulement (#76) : le créneau est affiché,
                     pour que l'AT regroupe ces points de vente entre eux. */}
-                {vol.temperature_class === 'GEL' && pdv?.is_day_gel && (
+                {vol.temperature_class === 'GEL' && hasShortGelWindow(pdv) && (
                   <span
                     className="px-1.5 py-0.5 rounded text-[10px] font-bold"
                     style={{ backgroundColor: 'rgba(139,92,246,0.18)', color: '#8b5cf6' }}
-                    title={`Gel de jour uniquement${pdv.delivery_window_gel_start ? ` — ${pdv.delivery_window_gel_start} à ${pdv.delivery_window_gel_end ?? ''}` : ''} (pas de sas gel)`}
+                    title={`Créneau gel court${pdv?.delivery_window_gel_start ? ` — ${pdv.delivery_window_gel_start} à ${pdv.delivery_window_gel_end ?? ''}` : ''} (pas de sas gel)`}
                   >
-                    GEL JOUR{pdv.delivery_window_gel_end ? ` ≤ ${pdv.delivery_window_gel_end}` : ''}
+                    GEL {pdv?.delivery_window_gel_end ? `≤ ${pdv.delivery_window_gel_end}` : 'COURT'}
                   </span>
                 )}
                 {vol.is_raq && (

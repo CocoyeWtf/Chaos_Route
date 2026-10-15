@@ -5,6 +5,7 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
+import { ReminderBanner } from './ReminderBanner'
 import { ChunkErrorBoundary } from '../ErrorBoundary'
 import { useAppStore } from '../../stores/useAppStore'
 import { recordRoute, installErrorCapture } from '../../services/supportContext'
@@ -35,6 +36,9 @@ export function MainLayout() {
       <div className="flex flex-col flex-1 overflow-hidden">
         {!isFullscreen && <div className="print-hide"><Header /></div>}
         <main className="flex-1 overflow-y-auto p-6 relative" style={{ backgroundColor: 'var(--bg-primary)' }}>
+          {/* Rappels periodiques (#17, #26) : hors plein ecran, pour ne pas
+              couper une carte en cours de construction. */}
+          {!isFullscreen && <div className="print-hide"><ReminderBanner /></div>}
           <ChunkErrorBoundary>
           <Suspense fallback={
             <div className="flex items-center justify-center h-64">

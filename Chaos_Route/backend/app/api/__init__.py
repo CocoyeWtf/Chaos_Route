@@ -60,6 +60,7 @@ from app.api import (
     crate_requests,
     base_support_rules,
     pdv_support_rules,
+    reminders,
     base_drivers,
     operational_alerts,
     tickets,
@@ -125,6 +126,7 @@ api_router.include_router(control_evidences.router, prefix="/control-evidences",
 api_router.include_router(crate_requests.router, prefix="/crate-requests", tags=["crate-requests"])
 api_router.include_router(base_support_rules.router, prefix="/base-support-rules", tags=["base-support-rules"])
 api_router.include_router(pdv_support_rules.router, prefix="/pdv-support-rules", tags=["pdv-support-rules"])
+api_router.include_router(reminders.router, prefix="/reminders", tags=["reminders"])
 api_router.include_router(base_drivers.router, prefix="/base-drivers", tags=["base-drivers"])
 api_router.include_router(operational_alerts.router, prefix="/alerts", tags=["alerts"])
 api_router.include_router(tickets.router, prefix="/tickets", tags=["tickets"])

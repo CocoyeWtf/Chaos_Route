@@ -3,6 +3,7 @@
 import { useMemo } from 'react'
 import { Marker, Tooltip, Popup } from 'react-leaflet'
 import L from 'leaflet'
+import { hasShortGelWindow } from '../../types'
 import type { PDV, PdvPickupSummary, TemperatureClass } from '../../types'
 import { TEMPERATURE_COLORS } from '../../types'
 
@@ -65,8 +66,9 @@ function makeIcon(color: string, size: number, borderWidth: number, hasPickup: b
 /* Cache d'icônes label / Label icon cache */
 const labelIconCache = new Map<string, L.DivIcon>()
 
-function makeLabelIcon(color: string, code: string, eqp: number, hasPickup: boolean = false, scale: number = 1): L.DivIcon {
-  const key = `label-${color}-${code}-${eqp}-${hasPickup}-${scale.toFixed(2)}`
+function makeLabelIcon(color: string, code: string, eqp: number, hasPickup: boolean = false,
+                      scale: number = 1, dayGelOnly: boolean = false): L.DivIcon {
+  const key = `label-${color}-${code}-${eqp}-${hasPickup}-${scale.toFixed(2)}-${dayGelOnly}`
   const cached = labelIconCache.get(key)
   if (cached) return cached
 
@@ -82,7 +84,7 @@ function makeLabelIcon(color: string, code: string, eqp: number, hasPickup: bool
   const icon = L.divIcon({
     className: '',
     html: `<div style="position:relative;transform:translate(-50%,-50%);display:inline-block;">
-      <div style="background:${color};color:#fff;padding:${padV}px ${padH}px;border-radius:4px;font-family:system-ui,sans-serif;text-align:center;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.5);line-height:1.2;border:1.5px solid rgba(255,255,255,.6);">
+      <div style="background:${color};color:#fff;padding:${padV}px ${padH}px;border-radius:4px;font-family:system-ui,sans-serif;text-align:center;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.5);line-height:1.2;border:1.5px solid ${dayGelOnly ? '#8b5cf6' : 'rgba(255,255,255,.6)'};">
         <div style="font-size:${fontSize1}px;font-weight:700;">${code}</div>
         <div style="font-size:${fontSize2}px;opacity:.9;">${eqp} eqc</div>
       </div>${badge}
@@ -101,13 +103,14 @@ function makeMultiTempLabelIcon(
   eqpByTemp: Record<string, number>,
   hasPickup: boolean = false,
   scale: number = 1,
+  dayGelOnly: boolean = false,
 ): L.DivIcon {
   const entries = TEMP_ORDER
     .filter((tc) => eqpByTemp[tc] != null && eqpByTemp[tc] > 0)
     .map((tc) => ({ tc, count: eqpByTemp[tc] }))
 
   const tempKey = entries.map((e) => `${e.tc}:${e.count}`).join(',')
-  const key = `mlabel-${code}-${tempKey}-${hasPickup}-${scale.toFixed(2)}`
+  const key = `mlabel-${code}-${tempKey}-${hasPickup}-${scale.toFixed(2)}-${dayGelOnly}`
   const cached = labelIconCache.get(key)
   if (cached) return cached
 
@@ -157,9 +160,11 @@ interface PdvMarkerProps {
 }
 
 export function PdvMarker({ pdv, onClick, onTempClick, onContextMenu, selected, volumeStatus = 'none', pickupSummary, showLabel, eqpByTemp, zoomLevel = 10 }: PdvMarkerProps) {
-  /* Gel de jour uniquement (#76) : signalé seulement s'il reste du gel à placer
-     pour ce point de vente, sinon le repère n'aide personne. */
-  const gelDeJour = !!pdv.is_day_gel && !!eqpByTemp?.GEL
+  /* Créneau gel court (#76) : signalé seulement s'il reste du gel à placer pour
+     ce point de vente, sinon le repère n'aide personne. Le critère n'est plus
+     `is_day_gel` — vrai pour 90 PDV sur 170, donc sans valeur de tri — mais la
+     fenêtre de livraison gel réellement courte : 26 PDV ferment à 14:00. */
+  const gelDeJour = hasShortGelWindow(pdv) && !!eqpByTemp?.GEL
   const eqpCount = eqpByTemp ? Object.values(eqpByTemp).reduce((a, b) => a + b, 0) : undefined
   if (!pdv.latitude || !pdv.longitude) return null
 
@@ -186,10 +191,10 @@ export function PdvMarker({ pdv, onClick, onTempClick, onContextMenu, selected, 
     if (showLabel && eqpCount != null && eqpCount > 0 && aPlanifier) {
       /* Multi-température : en-tête PDV + carrés colorés / Multi-temp: PDV header + colored squares */
       if (tempKeys.length > 1 && eqpByTemp) {
-        return makeMultiTempLabelIcon(pdv.code, eqpByTemp, hasPickup, s)
+        return makeMultiTempLabelIcon(pdv.code, eqpByTemp, hasPickup, s, gelDeJour)
       }
       /* Mono-température : pill colorée / Single temp: colored pill */
-      return makeLabelIcon(labelColor, pdv.code, eqpCount, hasPickup, s)
+      return makeLabelIcon(labelColor, pdv.code, eqpCount, hasPickup, s, gelDeJour)
     }
     /* Mode pastille classique — taille scalée / Classic dot mode — scaled size */
     if (selected) return makeIcon('#f97316', Math.round(24 * s), Math.round(3 * s), hasPickup, gelDeJour)

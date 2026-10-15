@@ -1379,3 +1379,31 @@ export function stopTemperatures(
     .map((v) => v.temperature_class as TemperatureClass)
   return Array.from(new Set(duPdv))
 }
+
+
+/** Point de vente dont le GEL n'est livrable que sur un creneau court (#76).
+
+    Premiere mouture : `is_day_gel`, qui vaut vrai pour 90 des 170 points de
+    vente — Gaetan : « la modification est faite sur tous les PDV jour, nous
+    avons deja un filtre pour ces PDV jour, cela fait double emploi ». Le besoin
+    reel est l'absence de sas gel, qui se lit a la fenetre de livraison : seuls
+    26 points de vente ferment le gel a 14:00, contre 18:30 ou 19:00 ailleurs et
+    61 en 24 h.
+
+    On teste la fermeture a 14:00 au plus tard plutot que la paire exacte
+    « 06:00-14:00 » : un magasin qui fermerait a 13:30 releve de la meme
+    contrainte, et le repere ne doit pas dependre d'une heure d'ouverture.
+    / Short frozen-delivery window: closes at 14:00 or earlier. */
+export const GEL_WINDOW_SHORT_END = '14:00'
+
+export function hasShortGelWindow(
+  pdv: { delivery_window_gel_start?: string | null; delivery_window_gel_end?: string | null } | null | undefined,
+): boolean {
+  if (!pdv) return false
+  const debut = pdv.delivery_window_gel_start
+  const fin = pdv.delivery_window_gel_end
+  if (!fin) return false
+  // « 06:00 - 05:59 » est une fenetre de 24 h, pas une contrainte.
+  if (debut && fin <= debut) return false
+  return fin <= GEL_WINDOW_SHORT_END
+}

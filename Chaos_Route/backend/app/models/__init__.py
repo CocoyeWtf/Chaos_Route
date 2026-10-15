@@ -63,6 +63,7 @@ from app.models.combi_scan import CombiScan, ScanContext
 from app.models.control_evidence import ControlEvidence, ControlContext
 from app.models.base_support_rule import BaseSupportRule
 from app.models.pdv_support_rule import PdvSupportRule
+from app.models.reminder_ack import ReminderAck
 from app.models.crate_type import CrateType
 from app.models.crate_request import CrateRequest, CrateRequestStatus
 from app.models.base_driver import BaseDriver, DriverStatus
@@ -176,6 +177,7 @@ __all__ = [
     "ControlContext",
     "BaseSupportRule",
     "PdvSupportRule",
+    "ReminderAck",
     "CrateType",
     "CrateRequest",
     "CrateRequestStatus",

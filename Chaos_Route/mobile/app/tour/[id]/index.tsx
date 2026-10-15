@@ -212,6 +212,35 @@ export default function TourDetailScreen() {
     )
   }
 
+  /* Validation manuelle de l'enlevement fournisseur (#57).
+     Samuel : « il doit valider manuellement, mais pas de QR code a scanner ».
+     Pas de scan, pas de quantite : on trace le passage, la quantite reprise
+     releve du circuit des etiquettes qui a ses propres scans. */
+  const handleFinalPickup = () => {
+    const fp = tour?.final_pickup
+    if (!fp) return
+    Alert.alert(
+      'Enlevement fournisseur',
+      `Confirmer le passage chez ${fp.name} ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Confirmer',
+          onPress: async () => {
+            try {
+              await api.post(`/driver/tour/${tourId}/final-pickup/validate`)
+              loadTour()
+            } catch (e: unknown) {
+              const msg = (e as { response?: { data?: { detail?: string } } })
+                ?.response?.data?.detail || 'Erreur'
+              Alert.alert('Erreur', msg)
+            }
+          },
+        },
+      ],
+    )
+  }
+
   const handleReturnBase = () => {
     Alert.alert(
       'Retour base',
@@ -315,11 +344,36 @@ export default function TourDetailScreen() {
         )}
         contentContainerStyle={styles.list}
         ListFooterComponent={
-          tour.status !== 'COMPLETED' && tour.status !== 'RETURNING' ? (
-            <TouchableOpacity onPress={handleReturnBase} style={styles.returnBtn}>
-              <Text style={styles.returnBtnText}>Retour base</Text>
-            </TouchableOpacity>
-          ) : null
+          <>
+            {/* Enlevement fournisseur, a sa vraie place : apres le dernier
+                point de vente et avant le retour (#57). */}
+            {tour.final_pickup && (
+              <View style={styles.pickupCard}>
+                <Text style={styles.pickupTitle}>Enlevement fournisseur</Text>
+                <Text style={styles.pickupName}>{tour.final_pickup.name}</Text>
+                {!!(tour.final_pickup.address || tour.final_pickup.city) && (
+                  <Text style={styles.pickupAddr}>
+                    {[tour.final_pickup.address, tour.final_pickup.postal_code,
+                      tour.final_pickup.city].filter(Boolean).join(' ')}
+                  </Text>
+                )}
+                {tour.final_pickup.done_at ? (
+                  <Text style={styles.pickupDone}>
+                    Passage confirme a {tour.final_pickup.done_at.slice(11, 16)}
+                  </Text>
+                ) : (
+                  <TouchableOpacity onPress={handleFinalPickup} style={styles.pickupBtn}>
+                    <Text style={styles.pickupBtnText}>Confirmer le passage</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+            {tour.status !== 'COMPLETED' && tour.status !== 'RETURNING' ? (
+              <TouchableOpacity onPress={handleReturnBase} style={styles.returnBtn}>
+                <Text style={styles.returnBtnText}>Retour base</Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
         }
       />
 
@@ -419,6 +473,27 @@ const styles = StyleSheet.create({
     padding: 14,
     paddingBottom: 40,
   },
+  pickupCard: {
+    backgroundColor: COLORS.bgSecondary,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#8b5cf6',
+    padding: 14,
+    marginTop: 16,
+  },
+  pickupTitle: { color: '#8b5cf6', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  pickupName: { color: COLORS.textPrimary, fontSize: 15, fontWeight: '700', marginTop: 4 },
+  pickupAddr: { color: COLORS.textMuted, fontSize: 12, marginTop: 2 },
+  pickupDone: { color: COLORS.success, fontSize: 13, fontWeight: '700', marginTop: 10 },
+  pickupBtn: {
+    backgroundColor: '#8b5cf6',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  pickupBtnText: { color: COLORS.white, fontSize: 14, fontWeight: '800' },
+
   returnBtn: {
     backgroundColor: COLORS.primary,
     borderRadius: 12,

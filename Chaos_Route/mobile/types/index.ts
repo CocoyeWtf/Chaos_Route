@@ -55,6 +55,22 @@ export interface SupportScan {
   accuracy?: number
 }
 
+/** Enlevement fournisseur en fin de tournee (#74, rendu visible au #57).
+
+    Le chauffeur passe chez un fournisseur apres son dernier point de vente et
+    avant de rentrer. L'arret entrait deja dans ses horaires et ses kilometres,
+    mais n'apparaissait ni sur sa feuille de route ni dans l'application : il
+    ne savait pas qu'il devait y passer. */
+export interface DriverFinalPickup {
+  supplier_id: number
+  name: string
+  address?: string | null
+  postal_code?: string | null
+  city?: string | null
+  duration_minutes?: number | null
+  done_at?: string | null
+}
+
 export interface DriverTour {
   id: number
   code: string
@@ -71,6 +87,7 @@ export interface DriverTour {
   driver_name?: string
   temperature_type?: string
   stops: DriverTourStop[]
+  final_pickup?: DriverFinalPickup | null
 }
 
 export interface AvailableTour {

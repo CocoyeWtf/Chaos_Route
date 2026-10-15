@@ -103,6 +103,13 @@ class Tour(Base, TenantMixin):
     # Temps sur place chez le fournisseur. NULL = temps de quai par défaut :
     # un chargement chez Avion et un chez Bister ne durent pas pareil.
     final_pickup_duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    # Validation MANUELLE de l'enlevement par le chauffeur (#57).
+    # Samuel : « il doit valider manuellement, mais pas de QR code a
+    # scanner ». Le #74 avait pose l'enlevement dans le calcul des
+    # horaires, des km et du cout, mais il n'apparaissait nulle part :
+    # ni sur la feuille de route, ni dans l'application du chauffeur.
+    # / Manual confirmation by the driver; no QR to scan.
+    final_pickup_done_at: Mapped[str | None] = mapped_column(String(32))
     delivery_date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD — date de livraison
     temperature_type: Mapped[str | None] = mapped_column(String(10))  # SEC|FRAIS|GEL|BI_TEMP|TRI_TEMP
     is_pickup_tour: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -144,6 +151,20 @@ class Tour(Base, TenantMixin):
     trailer_number: Mapped[str | None] = mapped_column(String(30))
     dock_door_number: Mapped[str | None] = mapped_column(String(10))
     trailer_ready_time: Mapped[str | None] = mapped_column(String(16))
+    # Heure a laquelle le ZUR est disponible a quai (#45, #46).
+    #
+    # La premiere mouture lisait « ZUR a quai » sur `trailer_ready_time`, la
+    # mise a disposition de la SEMI. Samuel a corrige : « ZUR designe un circuit
+    # de preparation a part, different des autres. Il peut etre disponible sur
+    # le quai pour chargement avant, ou apres, ou en meme temps que le reste de
+    # la preparation classique. C'est un type de palette special. »
+    #
+    # C'est donc un troisieme jalon, independant de la semi comme de la
+    # preparation generale — et c'est tout l'interet du code couleur du #46 :
+    # distinguer « preparation finie, ZUR pas encore la » de « ZUR la,
+    # preparation en retard ». Saisi par le postier.
+    # / ZUR is a separate preparation circuit, not the trailer.
+    zur_ready_time: Mapped[str | None] = mapped_column(String(16))
     # EQC reellement charges. Passe de entier a decimal (#47) : le postier
     # charge des demi-EQC et saisissait 12 pour 12,5. La colonne est migree en
     # numeric(10,2) au demarrage par `_migrate_column_types`. / Decimal EQC.

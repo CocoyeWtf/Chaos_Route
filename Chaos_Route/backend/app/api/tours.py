@@ -2970,6 +2970,9 @@ async def get_tour_waybill(
         if dispatch_date:
             break
 
+    fin_sup_wb = (await db.get(Supplier, tour.final_pickup_supplier_id)
+                  if tour.final_pickup_supplier_id else None)
+
     return {
         "tour_id": tour.id,
         "tour_code": tour.code,
@@ -3016,6 +3019,19 @@ async def get_tour_waybill(
             "issued_at": cmr_archive.issued_at,
         } if cmr_archive else None,
         "stops": stops_data,
+        # Enlevement fournisseur de fin de tournee (#74), que le chauffeur doit
+        # voir sur sa feuille de route et valider a la main (#57). Il entrait
+        # jusqu'ici dans les horaires, les km et le cout sans etre imprime
+        # nulle part : le chauffeur ne savait pas qu'il devait y passer.
+        "final_pickup": {
+            "supplier_id": fin_sup_wb.id,
+            "name": fin_sup_wb.name,
+            "address": getattr(fin_sup_wb, "address", None),
+            "postal_code": getattr(fin_sup_wb, "postal_code", None),
+            "city": getattr(fin_sup_wb, "city", None),
+            "duration_minutes": tour.final_pickup_duration_minutes,
+            "done_at": tour.final_pickup_done_at,
+        } if fin_sup_wb else None,
         "total_eqp": total_eqp,
         "total_weight_kg": round(total_weight, 2),
     }

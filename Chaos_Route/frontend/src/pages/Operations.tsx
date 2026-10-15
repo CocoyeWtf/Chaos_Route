@@ -231,6 +231,7 @@ export default function Operations() {
     trailer_number: string
     dock_door_number: string
     trailer_ready_time: string
+    zur_ready_time: string
     eqp_loaded: string
     departure_signal_time: string
     trailer_ready_temp: string
@@ -292,6 +293,7 @@ export default function Operations() {
             trailer_number: tour.trailer_number ?? '',
             dock_door_number: tour.dock_door_number ?? '',
             trailer_ready_time: tour.trailer_ready_time ?? '',
+            zur_ready_time: tour.zur_ready_time ?? '',
             eqp_loaded: tour.eqp_loaded != null ? String(tour.eqp_loaded) : '',
             departure_signal_time: tour.departure_signal_time ?? '',
             trailer_ready_temp: tour.trailer_ready_temp != null ? String(tour.trailer_ready_temp) : '',
@@ -340,7 +342,8 @@ export default function Operations() {
      / Advanced filters over the day's tours. */
   const loadingStateLabel = useCallback((tour: Tour): string => {
     if (tour.loading_end_time) return 'Chargé'
-    if (tour.trailer_ready_time) return 'En cours'
+    // Même jalon que la colonne Chargement : le ZUR, pas la semi (#45, #46).
+    if (tour.zur_ready_time) return 'En cours'
     return 'À charger'
   }, [])
 
@@ -401,6 +404,7 @@ export default function Operations() {
       const f = forms[tourId]
       await api.put(`/tours/${tourId}/operations`, {
         ...f,
+        zur_ready_time: f.zur_ready_time || null,
         total_weight_kg: f.total_weight_kg ? parseFloat(f.total_weight_kg) : null,
         eqp_loaded: f.eqp_loaded ? parseFloat(f.eqp_loaded) : null,  // demi-EQC acceptes (#47)
         trailer_ready_temp: f.trailer_ready_temp ? parseFloat(f.trailer_ready_temp) : null,
@@ -1161,7 +1165,7 @@ function AddStopInline({ pdvs, tourStopPdvIds, availableEqcByPdv, onAdd }: {
 interface TourRowProps {
   tour: TourWithDelay
   contract: Contract | null
-  form: { driver_name: string; driver_arrival_time: string; loading_end_time: string; total_weight_kg: string; remarks: string; loader_code: string; loader_name: string; trailer_number: string; dock_door_number: string; trailer_ready_time: string; eqp_loaded: string; departure_signal_time: string; trailer_ready_temp: string; loading_end_temp: string; vehicle_id: string; tractor_id: string } | undefined
+  form: { driver_name: string; driver_arrival_time: string; loading_end_time: string; total_weight_kg: string; remarks: string; loader_code: string; loader_name: string; trailer_number: string; dock_door_number: string; trailer_ready_time: string; zur_ready_time: string; eqp_loaded: string; departure_signal_time: string; trailer_ready_temp: string; loading_end_temp: string; vehicle_id: string; tractor_id: string } | undefined
   fleetVehicles: VehicleSummary[]
   isExpanded: boolean
   color: string
@@ -1219,25 +1223,30 @@ function TourRow({
      Loading state and preparation colour, derived from times entered elsewhere. */
   const tourVolumes = volumes.filter((v) => v.tour_id === tour.id)
   const prepDone = tourVolumes.length > 0 && tourVolumes.every((v) => !!v.preparation_end)
-  const trailerAtDock = !!tour.trailer_ready_time
+  /* « ZUR à quai » est son propre jalon (#45, #46). Il se lisait sur l'heure de
+     mise à disposition de la SEMI, ce qui était faux : Samuel a précisé que le
+     ZUR est un circuit de préparation à part, disponible avant, après ou en
+     même temps que la préparation classique. C'est précisément ce que le code
+     couleur doit distinguer. */
+  const zurAtDock = !!tour.zur_ready_time
   const loadingDone = !!tour.loading_end_time
 
   const loadingState: { label: string; color: string } = loadingDone
     ? { label: 'Chargé', color: 'var(--color-success)' }
-    : trailerAtDock
+    : zurAtDock
       ? { label: 'En cours', color: 'var(--color-warning)' }
       : { label: 'À charger', color: 'var(--text-muted)' }
 
   /* Vert : prêt à charger. Jaune : semi à quai mais préparation en retard.
      Bleu : préparation finie, on attend la semi. Rouge : rien n'est prêt. */
   const prepColor = prepDone
-    ? (trailerAtDock ? '#22c55e' : '#3b82f6')
-    : (trailerAtDock ? '#eab308' : '#ef4444')
+    ? (zurAtDock ? '#22c55e' : '#3b82f6')
+    : (zurAtDock ? '#eab308' : '#ef4444')
   const prepLabel = prepDone
-    ? (trailerAtDock ? 'Préparation finie, semi à quai — prêt à charger'
-                     : 'Préparation finie, semi pas encore à quai')
-    : (trailerAtDock ? 'Semi à quai, préparation pas terminée'
-                     : 'Ni la préparation ni la semi ne sont prêtes')
+    ? (zurAtDock ? 'Préparation finie, ZUR à quai — prêt à charger'
+                 : 'Préparation finie, ZUR pas encore à quai')
+    : (zurAtDock ? 'ZUR à quai, préparation pas terminée'
+                 : 'Ni la préparation ni le ZUR ne sont prêts')
 
   /* Une tournée reste modifiable jusqu'au top départ (#37) : c'est la règle que
      le serveur applique, l'écran s'y aligne au lieu de figer plus tôt. /
@@ -1590,7 +1599,24 @@ function TourRow({
             </div>
 
             {/* Ligne 1 — Prépa semi / Trailer preparation */}
-            <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '2fr 0.8fr 1fr 1fr' }}>
+            <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '2fr 2fr 0.8fr 1fr 1fr' }}>
+              {/* Dispo ZUR (#45, #46) : jalon distinct de la mise à disposition
+                  de la semi. Le ZUR est un circuit de préparation à part, qui
+                  peut arriver à quai avant, après ou en même temps que la
+                  préparation classique — c'est ce que le code couleur de la
+                  ligne distingue, et il se lisait jusqu'ici sur la semi. */}
+              <div className="min-w-0">
+                <label className="block text-xs font-semibold mb-1" style={{ color: '#8b5cf6' }}>Dispo ZUR</label>
+                <div className="flex gap-1">
+                  <input type="datetime-local" value={form.zur_ready_time} onChange={(e) => onFormChange('zur_ready_time', e.target.value)}
+                    className="flex-1 min-w-0 px-1.5 py-1.5 rounded border text-xs"
+                    style={{ backgroundColor: 'var(--bg-primary)', borderColor: '#8b5cf6', color: 'var(--text-primary)' }}
+                    title="Heure à laquelle le ZUR est disponible à quai — commande la couleur de la ligne"
+                    onClick={(e) => e.stopPropagation()} />
+                  <button onClick={(e) => { e.stopPropagation(); onSetNow('zur_ready_time') }}
+                    className="px-1.5 rounded text-xs font-bold shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', color: '#8b5cf6' }} title="Maintenant">&#9201;</button>
+                </div>
+              </div>
               <div className="min-w-0">
                 <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>Dispo semi</label>
                 <div className="flex gap-1">

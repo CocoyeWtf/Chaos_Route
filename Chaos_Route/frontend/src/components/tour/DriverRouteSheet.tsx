@@ -142,6 +142,29 @@ export function DriverRouteSheet({ tourId, onClose }: DriverRouteSheetProps) {
                         <td style={tdStyle}></td>
                       </tr>
                     ))}
+                    {/* Enlevement fournisseur avant le retour (#74, affiche au #57).
+                        Il entrait deja dans les horaires et les kilometres, mais
+                        n'etait imprime nulle part : le chauffeur ne savait pas
+                        qu'il devait y passer. Il s'intercale a sa vraie place,
+                        apres le dernier point de vente et avant le retour. */}
+                    {data.final_pickup && (
+                      <tr style={{ backgroundColor: '#f3e8ff' }}>
+                        <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 'bold' }}>E</td>
+                        <td style={{ ...tdStyle, fontWeight: 'bold' }} colSpan={3}>
+                          ENLÈVEMENT — {data.final_pickup.name}
+                        </td>
+                        <td style={tdStyle}>{data.final_pickup.city ?? ''}</td>
+                        <td style={{ ...tdStyle, fontSize: '10px' }}>{data.final_pickup.address ?? ''}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}></td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}></td>
+                        <td style={{ ...tdStyle, textAlign: 'center', fontSize: '10px' }}>
+                          {data.final_pickup.duration_minutes
+                            ? `${data.final_pickup.duration_minutes} min`
+                            : ''}
+                        </td>
+                        <td style={tdStyle}></td>
+                      </tr>
+                    )}
                     {/* Ligne retour base / Base return row */}
                     <tr style={{ backgroundColor: '#f5f5f5' }}>
                       <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 'bold' }}>R</td>

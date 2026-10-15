@@ -88,6 +88,7 @@ class TourBase(BaseModel):
     # Enlèvement fournisseur en fin de tournée, avant retour base (#74)
     final_pickup_supplier_id: int | None = None
     final_pickup_duration_minutes: int | None = None
+    final_pickup_done_at: str | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool = False
@@ -112,6 +113,7 @@ class TourBase(BaseModel):
     trailer_number: str | None = None
     dock_door_number: str | None = None
     trailer_ready_time: str | None = None
+    zur_ready_time: str | None = None
     eqp_loaded: float | None = None
     departure_signal_time: str | None = None
     wms_tour_code: str | None = None
@@ -146,6 +148,7 @@ class TourUpdate(BaseModel):
     return_base_id: int | None = None
     final_pickup_supplier_id: int | None = None
     final_pickup_duration_minutes: int | None = None
+    final_pickup_done_at: str | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool | None = None
@@ -167,6 +170,7 @@ class TourUpdate(BaseModel):
     trailer_number: str | None = None
     dock_door_number: str | None = None
     trailer_ready_time: str | None = None
+    zur_ready_time: str | None = None
     eqp_loaded: float | None = None
     departure_signal_time: str | None = None
     trailer_ready_temp: float | None = None
@@ -190,6 +194,7 @@ class TourOperationsUpdate(BaseModel):
     trailer_number: str | None = None
     dock_door_number: str | None = None
     trailer_ready_time: str | None = None
+    zur_ready_time: str | None = None
     eqp_loaded: float | None = None
     departure_signal_time: str | None = None
     trailer_ready_temp: float | None = None
@@ -224,7 +229,8 @@ class TourSchedule(BaseModel):
     priority: float | None = None           # priorité manuelle d'ordonnancement, décimale (#29)
     return_base_id: int | None = None       # base de retour si différente du départ (#64)
     final_pickup_supplier_id: int | None = None      # enlèvement fournisseur en fin de tournée (#74)
-    final_pickup_duration_minutes: int | None = None  # temps sur place ; None = temps de quai
+    final_pickup_duration_minutes: int | None = None
+    final_pickup_done_at: str | None = None  # temps sur place ; None = temps de quai
 
     @model_validator(mode="after")
     def check_assignment(self) -> "TourSchedule":

@@ -254,6 +254,24 @@ class DriverTourStopRead(BaseModel):
     pending_pickup_labels_count: int = 0
     pickup_summary: list[PickupSummaryItem] = []
 
+class DriverFinalPickupRead(BaseModel):
+    """Enlevement fournisseur en fin de tournee (#74, rendu visible au #57).
+
+    Le chauffeur passe chez un fournisseur apres son dernier point de vente et
+    avant de rentrer. Cet arret entrait deja dans ses horaires, ses kilometres
+    et le cout de la tournee, mais il n'etait affiche nulle part : le chauffeur
+    ne savait pas qu'il devait y passer. Il le voit maintenant, et le valide a
+    la main — Samuel : « pas de QR code a scanner ».
+    """
+    supplier_id: int
+    name: str
+    address: str | None = None
+    postal_code: str | None = None
+    city: str | None = None
+    duration_minutes: int | None = None
+    done_at: str | None = None
+
+
 class DriverTourRead(BaseModel):
     """Vue tour complete pour le chauffeur / Full driver tour view."""
     id: int
@@ -271,6 +289,7 @@ class DriverTourRead(BaseModel):
     driver_name: str | None = None
     temperature_type: str | None = None
     stops: list[DriverTourStopRead] = []
+    final_pickup: DriverFinalPickupRead | None = None
 
 
 # ─── Tour assignment from mobile ───

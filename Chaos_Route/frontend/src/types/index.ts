@@ -239,6 +239,8 @@ export interface Tour {
   trailer_number?: string
   dock_door_number?: string
   trailer_ready_time?: string
+  /* Heure de mise a quai du ZUR, jalon distinct de la semi (#45, #46). */
+  zur_ready_time?: string
   eqp_loaded?: number
   departure_signal_time?: string
   trailer_ready_temp?: number | null
@@ -381,6 +383,16 @@ export interface WaybillData {
   stops: WaybillStop[]
   total_eqp: number
   total_weight_kg: number
+  /* Enlevement fournisseur de fin de tournee (#74), imprime au #57. */
+  final_pickup?: {
+    supplier_id: number
+    name: string
+    address?: string | null
+    postal_code?: string | null
+    city?: string | null
+    duration_minutes?: number | null
+    done_at?: string | null
+  } | null
 }
 
 /* Capacité par défaut selon le type de véhicule (en EQC) / Default capacity per vehicle type (in EQC) */

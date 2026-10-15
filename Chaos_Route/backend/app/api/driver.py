@@ -40,6 +40,7 @@ from app.models.parameter import Parameter
 from app.models.support_type import SupportType
 from app.models.temperature_check import TemperatureCheck, TempCheckpoint
 from app.schemas.mobile import (
+    DriverFinalPickupRead,
     AvailableTourRead,
     DriverTourRead,
     DriverTourStopRead,
@@ -297,6 +298,22 @@ async def _build_tour_read(tour: Tour, db: AsyncSession) -> DriverTourRead:
         pickup_summary_map = dict(summary_raw)
 
     status_val = tour.status.value if hasattr(tour.status, "value") else tour.status
+    # Enlevement fournisseur de fin de tournee (#74), rendu visible au #57.
+    final_pickup = None
+    if tour.final_pickup_supplier_id:
+        from app.models.supplier import Supplier
+        fournisseur = await db.get(Supplier, tour.final_pickup_supplier_id)
+        if fournisseur:
+            final_pickup = DriverFinalPickupRead(
+                supplier_id=fournisseur.id,
+                name=fournisseur.name,
+                address=getattr(fournisseur, "address", None),
+                postal_code=getattr(fournisseur, "postal_code", None),
+                city=getattr(fournisseur, "city", None),
+                duration_minutes=tour.final_pickup_duration_minutes,
+                done_at=tour.final_pickup_done_at,
+            )
+
     return DriverTourRead(
         id=tour.id,
         code=tour.code,
@@ -313,6 +330,7 @@ async def _build_tour_read(tour: Tour, db: AsyncSession) -> DriverTourRead:
         driver_name=tour.driver_name,
         temperature_type=tour.temperature_type,
         stops=_build_tour_stops(tour.stops, pdv_map, support_counts, pickup_label_counts, pickup_summary_map),
+        final_pickup=final_pickup,
     )
 
 
@@ -1023,6 +1041,44 @@ async def reopen_stop(
     })
 
     return {"status": "ok", "delivery_status": "ARRIVED"}
+
+
+@router.post("/tour/{tour_id}/final-pickup/validate")
+async def validate_final_pickup(
+    tour_id: int,
+    db: AsyncSession = Depends(get_db),
+    device: MobileDevice = Depends(require_device_tour_access),
+):
+    """Confirmer l'enlevement fournisseur de fin de tournee (#57).
+
+    Samuel : « il doit valider manuellement, mais pas de QR code a scanner ».
+    Pas de scan, donc, et pas de quantite : ce que l'on veut tracer, c'est que
+    le chauffeur est bien passe. La quantite reprise releve du circuit des
+    etiquettes de reprise, qui a ses propres scans.
+
+    Idempotent : une seconde validation ne deplace pas l'horodatage. Le
+    chauffeur appuie parfois deux fois, et la premiere heure est la bonne.
+    """
+    tour = await db.get(Tour, tour_id)
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    if not tour.final_pickup_supplier_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Cette tournee ne comporte pas d'enlevement fournisseur",
+        )
+    if tour.final_pickup_done_at:
+        return {"status": "already_done", "done_at": tour.final_pickup_done_at}
+
+    tour.final_pickup_done_at = _now_iso()
+    db.add(AuditLog(
+        entity_type="tour", entity_id=tour_id, action="FINAL_PICKUP_DONE",
+        changes=f'{{"device_id":{device.id},"supplier_id":{tour.final_pickup_supplier_id}}}',
+        user=f"device:{device.id}",
+        timestamp=_now_iso(),
+    ))
+    await db.flush()
+    return {"status": "ok", "done_at": tour.final_pickup_done_at}
 
 
 @router.post("/tour/{tour_id}/return")

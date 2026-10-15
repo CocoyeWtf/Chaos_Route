@@ -18,7 +18,21 @@ type MapMessage =
      Villers, la carte occupe tout l'écran et revenir à l'autre fenêtre pour un
      simple clic casse le rythme. / Save the draft from the detached map. */
   | { type: 'SAVE_DRAFT' }
+  /* Choix du moyen de transport depuis la carte (#75) : le bouton
+     « Enregistrer le brouillon » obligeait quand meme a revenir sur la fenetre
+     principale pour choisir le vehicule, et n'avait donc « plus d'interet ». */
+  | { type: 'SET_VEHICLE_TYPE'; payload: string }
+  | { type: 'TOUR_STATE'; payload: TourStatePayload }
   | { type: 'MAP_CLOSING' }
+
+export interface TourStatePayload {
+  vehicleType: string | null
+  capacityEqp: number
+  totalEqp: number
+  stopsCount: number
+  blocked: [string, string][]
+  options: { value: string; label: string; capacity: number }[]
+}
 
 interface MapInitPayload {
   theme: 'dark' | 'light'
@@ -47,6 +61,8 @@ export interface DetachedMapState {
   pdvEqpMap: Map<number, Record<string, number>>
   routeCoords: [number, number][]
   pickupByPdv: Map<number, PdvPickupSummary>
+  /* Etat du tour en construction, pour le selecteur de gabarit (#75). */
+  tourState: TourStatePayload | null
 }
 
 export function useDetachedMapReceiver() {
@@ -54,6 +70,7 @@ export function useDetachedMapReceiver() {
     ready: false,
     theme: 'dark',
     regionId: null,
+    tourState: null,
     selectedPdvIds: new Set(),
     pdvVolumeStatusMap: new Map(),
     pdvEqpMap: new Map(),
@@ -79,17 +96,22 @@ export function useDetachedMapReceiver() {
     channel.onmessage = (event: MessageEvent<MapMessage>) => {
       const msg = event.data
       if (msg.type === 'MAP_INIT') {
-        setState({
+        // `tourState` arrive dans son propre message, juste apres : on conserve
+        // celui deja recu plutot que de l'effacer a chaque reconnexion.
+        setState((prev) => ({
+          ...prev,
           ready: true,
           theme: msg.payload.theme,
           regionId: msg.payload.regionId,
           ...deserializeSync(msg.payload),
-        })
+        }))
       } else if (msg.type === 'MAP_STATE_SYNC') {
         setState((prev) => ({
           ...prev,
           ...deserializeSync(msg.payload),
         }))
+      } else if (msg.type === 'TOUR_STATE') {
+        setState((prev) => ({ ...prev, tourState: msg.payload }))
       }
     }
 
@@ -131,5 +153,12 @@ export function useDetachedMapReceiver() {
     channelRef.current?.postMessage({ type: 'SAVE_DRAFT' })
   }, [])
 
-  return { ...state, sendPdvClick, sendPdvTempClick, sendPdvContextMenu, sendSaveDraft }
+  /* Demande le changement de moyen de transport a la fenetre principale (#75).
+     Comme pour l'enregistrement : la carte demande, la fenetre principale fait,
+     parce qu'elle seule detient le tour en cours et ses controles. */
+  const sendVehicleType = useCallback((vt: string) => {
+    channelRef.current?.postMessage({ type: 'SET_VEHICLE_TYPE', payload: vt })
+  }, [])
+
+  return { ...state, sendPdvClick, sendPdvTempClick, sendPdvContextMenu, sendSaveDraft, sendVehicleType }
 }

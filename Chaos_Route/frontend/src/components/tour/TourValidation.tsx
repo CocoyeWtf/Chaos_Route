@@ -2,7 +2,7 @@
 
 import { useTranslation } from 'react-i18next'
 import type { TourStop, VehicleType, TemperatureType } from '../../types'
-import { TEMPERATURE_TYPE_LABELS } from '../../types'
+import { TEMPERATURE_TYPE_LABELS, FILL_COLORS, FILL_LABELS, fillLevel } from '../../types'
 
 interface TourValidationProps {
   stops: TourStop[]
@@ -85,16 +85,47 @@ export function TourValidation({ stops, vehicleType, capacityEqp, totalEqp, onVa
     info: { bg: 'rgba(34,197,94,0.1)', text: 'var(--color-success)', icon: '✓' },
   }
 
+  /* Coefficient de remplissage (#75). Gaetan : « le planning doit faire une
+     verification selon le coefficient de remplissage des semis. Un pourcentage
+     peut etre ajoute en vert ou en rouge selon un critere defini. »
+     Le chiffre existait deja dans les messages de validation, mais noye parmi
+     eux et seulement aux extremes — on le montre en permanence, avec sa
+     couleur, parce que c'est sur lui qu'on arbitre d'ajouter un PDV de plus. */
+  const pctRemplissage = capacityEqp > 0 ? Math.round((totalEqp / capacityEqp) * 100) : 0
+  const niveau = fillLevel(pctRemplissage)
+  const montrerRemplissage = !isPickupTour && capacityEqp > 0 && stops.length > 0
+
   return (
     <div
       className="rounded-xl border overflow-hidden"
       style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
     >
-      <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
+      <div className="px-4 py-3 border-b flex items-center gap-3" style={{ borderColor: 'var(--border-color)' }}>
         <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
           {t('tourPlanning.validation.title')}
         </h3>
+        {montrerRemplissage && (
+          <span className="ml-auto flex items-center gap-2" title={FILL_LABELS[niveau]}>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {totalEqp.toFixed(2)} / {capacityEqp} EQC
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-xs font-bold"
+              style={{ backgroundColor: `${FILL_COLORS[niveau]}22`, color: FILL_COLORS[niveau] }}>
+              {pctRemplissage} %
+            </span>
+          </span>
+        )}
       </div>
+      {montrerRemplissage && (
+        <div style={{ height: '4px', backgroundColor: 'var(--bg-tertiary)' }}>
+          <div style={{
+            height: '4px',
+            width: `${Math.min(pctRemplissage, 100)}%`,
+            backgroundColor: FILL_COLORS[niveau],
+            transition: 'width .2s',
+          }} />
+        </div>
+      )}
 
       <div className="p-3 space-y-2">
         {messages.map((msg, i) => {

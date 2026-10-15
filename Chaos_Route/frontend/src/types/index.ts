@@ -1421,3 +1421,56 @@ export function hasShortGelWindow(
   if (debut && fin <= debut) return false
   return fin <= GEL_WINDOW_SHORT_END
 }
+
+
+/** Coefficient de remplissage d'une tournée et sa couleur (#75).
+
+    Barème donné par Gaetan : « entre 0 % et 79 % et + de 106 % rouge, entre
+    80 % et 90 % orange, entre 91 % et 105 % vert ». Les deux extrêmes sont
+    rouges pour des raisons opposées — un camion à moitié vide coûte autant
+    qu'un camion plein, un camion à 110 % ne part pas — et c'est justement
+    pour cela que le chiffre seul ne suffit pas : la couleur dit en un coup
+    d'œil de quel côté on se trouve.
+
+    Le vert monte jusqu'à 105 % parce que le surbooking court est admis à la
+    construction (la capacité réelle dépasse la capacité théorique). */
+export type FillLevel = 'low' | 'warn' | 'ok' | 'over'
+
+export const FILL_COLORS: Record<FillLevel, string> = {
+  low: '#ef4444',
+  warn: '#f59e0b',
+  ok: '#22c55e',
+  over: '#ef4444',
+}
+
+export const FILL_LABELS: Record<FillLevel, string> = {
+  low: 'sous-rempli',
+  warn: 'remplissage limite',
+  ok: 'remplissage correct',
+  over: 'surcharge',
+}
+
+export function fillLevel(pct: number): FillLevel {
+  if (pct > 105) return 'over'
+  if (pct >= 91) return 'ok'
+  if (pct >= 80) return 'warn'
+  return 'low'
+}
+
+/** Gabarit à proposer pour un tour, d'après les contraintes de ses PDV (#75).
+
+    Gaetan : « CMRO définit par défaut un moyen de transport en semi 54 sauf
+    pour les PDV où cela n'est pas autorisé. La fiche PDV définit le moyen de
+    transport préconisé. Ce choix devra pouvoir être modifié. »
+
+    On propose, on n'impose pas : la valeur retenue reste modifiable, et le
+    forçage d'un gabarit refusé reste possible — il est seulement signalé. */
+export function suggestVehicleType(
+  blocked: Map<VehicleType, string>,
+  preference: VehicleType[] = ['SEMI', 'SEMI_COURTE', 'PORTEUR_REMORQUE', 'PORTEUR', 'PORTEUR_SURBAISSE', 'VL'],
+): VehicleType | null {
+  for (const vt of preference) {
+    if (!blocked.has(vt) && VEHICLE_TYPE_DEFAULTS[vt]) return vt
+  }
+  return null
+}

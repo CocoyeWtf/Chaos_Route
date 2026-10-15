@@ -18,7 +18,24 @@ type MapMessage =
      Villers, la carte occupe tout l'écran et revenir à l'autre fenêtre pour un
      simple clic casse le rythme. / Save the draft from the detached map. */
   | { type: 'SAVE_DRAFT' }
+  /* Choix du moyen de transport depuis la carte (#75) : sans lui, le bouton
+     « Enregistrer le brouillon » obligeait quand meme a revenir sur la fenetre
+     principale, et n'avait donc « plus d'interet » (Gaetan). */
+  | { type: 'SET_VEHICLE_TYPE'; payload: string }
+  | { type: 'TOUR_STATE'; payload: TourStatePayload }
   | { type: 'MAP_CLOSING' }
+
+/** Etat du tour en construction, pousse vers la carte detachee (#75). */
+export interface TourStatePayload {
+  vehicleType: string | null
+  capacityEqp: number
+  totalEqp: number
+  stopsCount: number
+  /* Gabarits refuses par un PDV du tour, avec la raison (#32). */
+  blocked: [string, string][]
+  /* Gabarits proposables, avec leur libelle et leur capacite par defaut. */
+  options: { value: string; label: string; capacity: number }[]
+}
 
 interface MapInitPayload {
   theme: 'dark' | 'light'
@@ -51,6 +68,9 @@ interface UseDetachedMapOptions {
   onPdvContextMenu?: (pdv: PDV) => void
   /* Enregistrement du brouillon demandé depuis la carte détachée (#75) */
   onSaveDraft?: () => void
+  /* État du tour poussé vers la carte, et choix du gabarit fait depuis elle (#75) */
+  tourState?: TourStatePayload
+  onSelectVehicleType?: (vt: string) => void
 }
 
 export function useDetachedMap({
@@ -65,6 +85,8 @@ export function useDetachedMap({
   onPdvTempClick,
   onPdvContextMenu,
   onSaveDraft,
+  tourState,
+  onSelectVehicleType,
 }: UseDetachedMapOptions) {
   const [isDetached, setIsDetached] = useState(false)
   const channelRef = useRef<BroadcastChannel | null>(null)
@@ -80,6 +102,10 @@ export function useDetachedMap({
   onPdvContextMenuRef.current = onPdvContextMenu
   const onSaveDraftRef = useRef(onSaveDraft)
   useEffect(() => { onSaveDraftRef.current = onSaveDraft }, [onSaveDraft])
+  const onSelectVehicleTypeRef = useRef(onSelectVehicleType)
+  useEffect(() => { onSelectVehicleTypeRef.current = onSelectVehicleType }, [onSelectVehicleType])
+  const tourStateRef = useRef(tourState)
+  useEffect(() => { tourStateRef.current = tourState }, [tourState])
   const themeRef = useRef(theme)
   themeRef.current = theme
   const regionIdRef = useRef(regionId)
@@ -113,6 +139,9 @@ export function useDetachedMap({
           ...serializeRef.current(),
         }
         channel.postMessage({ type: 'MAP_INIT', payload: initPayload })
+        if (tourStateRef.current) {
+          channel.postMessage({ type: 'TOUR_STATE', payload: tourStateRef.current })
+        }
       } else if (msg.type === 'PDV_CLICK') {
         onPdvClickRef.current(msg.payload)
       } else if (msg.type === 'PDV_TEMP_CLICK') {
@@ -121,6 +150,8 @@ export function useDetachedMap({
         onPdvContextMenuRef.current?.(msg.payload)
       } else if (msg.type === 'SAVE_DRAFT') {
         onSaveDraftRef.current?.()
+      } else if (msg.type === 'SET_VEHICLE_TYPE') {
+        onSelectVehicleTypeRef.current?.(msg.payload)
       } else if (msg.type === 'MAP_CLOSING') {
         setIsDetached(false)
       }
@@ -151,6 +182,17 @@ export function useDetachedMap({
       payload: serializeState(),
     } satisfies MapMessage)
   }, [isDetached, serializeState])
+
+  /* Pousse l'état du tour (gabarit, remplissage, gabarits refusés) vers la
+     carte détachée (#75), pour qu'elle puisse proposer le choix du moyen de
+     transport sans qu'on revienne sur la fenêtre principale. */
+  useEffect(() => {
+    if (!isDetached || !channelRef.current || !tourState) return
+    channelRef.current.postMessage({
+      type: 'TOUR_STATE',
+      payload: tourState,
+    } satisfies MapMessage)
+  }, [isDetached, tourState])
 
   /* Détacher : ouvrir popup / Detach: open popup */
   const detach = useCallback(() => {

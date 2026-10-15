@@ -19,7 +19,7 @@ import { create } from '../../services/api'
 import api from '../../services/api'
 import type { VehicleType, TemperatureType, TemperatureClass, Volume, PDV, BaseLogistics, Tour, TourStop, DistanceEntry, Contract, PdvPickupSummary, Supplier } from '../../types'
 import type { PdvVolumeStatus } from '../map/PdvMarker'
-import { VEHICLE_TYPE_DEFAULTS, SELECTABLE_VEHICLE_TYPES, TEMPERATURE_TYPE_LABELS } from '../../types'
+import { VEHICLE_TYPE_DEFAULTS, SELECTABLE_VEHICLE_TYPES, TEMPERATURE_TYPE_LABELS, suggestVehicleType } from '../../types'
 import { getRequiredTemperatureType, checkTemperatureCompatibility } from '../../utils/temperatureUtils'
 import { getApiErrorMessage } from '../../utils/apiError'
 
@@ -391,6 +391,21 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
      plus restrictif : on ne retire rien du tour, on avertit. / The chosen type
      became forbidden by a PDV added afterwards: warn, don't undo. */
   const vehicleTypeConflict = selectedVehicleType ? blockedVehicleTypes.get(selectedVehicleType) ?? null : null
+
+  /* Gabarit proposé automatiquement (#75). Gaetan : « CMRO définit par défaut
+     un moyen de transport en semi 54 sauf pour les PDV où cela n'est pas
+     autorisé. La fiche PDV définit le moyen de transport préconisé. »
+
+     C'est ce qui manquait pour que « Enregistrer le brouillon » depuis la carte
+     détachée ait un intérêt : il fallait revenir sur la fenêtre principale pour
+     le seul choix du véhicule. On propose dès le premier PDV, et seulement si
+     rien n'a été choisi : une proposition qui écraserait un choix manuel serait
+     pire que pas de proposition du tout. */
+  const vehicleTypeSuggere = useMemo(
+    () => suggestVehicleType(blockedVehicleTypes),
+    [blockedVehicleTypes],
+  )
+  const [gabaritAutoPose, setGabaritAutoPose] = useState(false)
 
   /* Deux PDV aux gabarits incompatibles entre eux : plus aucun véhicule n'est
      sélectionnable. Sans message, l'écran semblerait cassé. / No common vehicle
@@ -805,7 +820,32 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
        défini plus bas, et le hook ne doit pas capturer une version périmée. /
        Save the draft from the full-screen map, via a ref to avoid a stale copy. */
     onSaveDraft: () => handleValidateRef.current(),
+    /* Etat du tour pousse vers la carte detachee, pour qu'elle propose le choix
+       du moyen de transport et le coefficient de remplissage (#75). */
+    tourState: {
+      vehicleType: selectedVehicleType,
+      capacityEqp,
+      totalEqp,
+      stopsCount: currentStops.length,
+      blocked: [...blockedVehicleTypes.entries()] as [string, string][],
+      options: SELECTABLE_VEHICLE_TYPES.map((vt) => ({
+        value: vt,
+        label: VEHICLE_TYPE_DEFAULTS[vt].label,
+        capacity: VEHICLE_TYPE_DEFAULTS[vt].capacity_eqp,
+      })),
+    },
+    onSelectVehicleType: (vt: string) => {
+      const type = vt as VehicleType
+      const defaut = VEHICLE_TYPE_DEFAULTS[type]
+      if (!defaut) return
+      setGabaritAutoPose(false)
+      handleSelectVehicleTypeRef.current(type, defaut.capacity_eqp)
+    },
   })
+
+  /* Meme precaution que pour l'enregistrement : le hook ne doit pas capturer
+     une version perimee du gestionnaire. */
+  const handleSelectVehicleTypeRef = useRef<(vt: VehicleType, cap: number) => void>(() => {})
 
   /* Référence vers l'enregistrement du brouillon, pour la carte détachée (#75) */
   const handleValidateRef = useRef<() => void>(() => {})
@@ -859,6 +899,21 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   }
 
   useEffect(() => { handleValidateRef.current = handleValidate })
+  useEffect(() => { handleSelectVehicleTypeRef.current = handleSelectVehicleType })
+
+  /* Pose le gabarit proposé dès qu'un premier PDV entre dans le tour (#75). */
+  useEffect(() => {
+    if (selectedVehicleType || currentStops.length === 0 || tourMode === 'pickup') return
+    if (!vehicleTypeSuggere) return
+    const defaut = VEHICLE_TYPE_DEFAULTS[vehicleTypeSuggere]
+    if (!defaut) return
+    handleSelectVehicleTypeRef.current(vehicleTypeSuggere, defaut.capacity_eqp)
+    setGabaritAutoPose(true)
+    // On passe par la référence : la dépendre du gestionnaire reposerait le
+    // gabarit à chaque rendu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVehicleType, currentStops.length, vehicleTypeSuggere, tourMode])
+
 
   /* Créer un tour mouvement (déplacement base / garage, sans arrêt) ou transfert
      PDV à PDV (2 arrêts : origine = chargement, destination = dépose) /
@@ -997,6 +1052,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const handleReset = () => {
     resetTour()
     setSelectedVehicleType(null)
+    setGabaritAutoPose(false)
     setCapacityEqp(0)
     setSelectedTemperatureType(null)
     setManualBaseId(null)
@@ -1459,8 +1515,18 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
             Vehicle type is now editable: picking the wrong one no longer forces
             a full reset of the tour. */}
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+          <label className="text-xs font-medium flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>
             {t('tourPlanning.vehicleType')}
+            {/* Le gabarit a été posé par l'application d'après les contraintes
+                des PDV du tour (#75). On le dit, parce qu'un choix qu'on n'a pas
+                fait soi-même doit se voir — et parce qu'il reste modifiable. */}
+            {gabaritAutoPose && (
+              <span className="px-1 rounded text-[9px] font-bold"
+                style={{ backgroundColor: 'rgba(249,115,22,0.18)', color: 'var(--color-primary)' }}
+                title="Proposé d'après les gabarits acceptés par les points de vente du tour — modifiable">
+                AUTO
+              </span>
+            )}
           </label>
           <select
             className="text-sm font-semibold px-2 py-2 rounded-lg border"
@@ -1473,6 +1539,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
             onChange={(e) => {
               const vt = e.target.value as VehicleType
               if (!vt) return
+              setGabaritAutoPose(false)
               handleSelectVehicleType(vt, VEHICLE_TYPE_DEFAULTS[vt].capacity_eqp)
             }}
           >

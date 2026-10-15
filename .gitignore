@@ -29,3 +29,8 @@ ImagesContenants/
 *.njsproj
 *.sln
 *.sw?
+
+# Donnees applicatives locales (photos de tickets, images de supports, bases
+# SQLite de dev). Elles vivent dans le volume du conteneur en production ;
+# versionnees ici, elles ecraseraient la prod au deploiement.
+Chaos_Route/backend/data/

@@ -148,6 +148,39 @@ def require_permission(resource: str, action: str):
     return _check
 
 
+def require_any_permission(*required: tuple[str, str]):
+    """Vérifie qu'au moins UNE des permissions est détenue / Check that AT LEAST ONE is held.
+
+    Un même endpoint sert parfois plusieurs écrans qui ne relèvent pas de la même
+    ressource. Le cas d'école est `GET /tours/` : l'ordonnancement le lit sous
+    `tour-planning:read`, l'écran postier sous `operations:read`. Sans ce factory,
+    la seule façon d'ouvrir l'écran postier était de donner `tour-planning:read`
+    au rôle — ce qui lui faisait apparaître le menu Ordonnancement et tout l'écran
+    de planification avec (ticket #107, même classe de défaut que #102 et #24 :
+    la ressource de l'écran ne commandait pas ses endpoints).
+
+    Superadmin bypass toutes les permissions / Superadmin bypasses all permissions.
+    """
+
+    async def _check(user: User = Depends(get_current_user)) -> User:
+        if user.is_superadmin:
+            return user
+
+        wanted = set(required)
+        for role in user.roles:
+            for perm in role.permissions:
+                if (perm.resource, perm.action) in wanted:
+                    return user
+
+        expected = " ou ".join(f"{r}:{a}" for r, a in required)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission required: {expected}",
+        )
+
+    return _check
+
+
 async def get_authenticated_device(
     x_device_id: str = Header(..., alias="X-Device-ID"),
     x_app_version: str | None = Header(None, alias="X-App-Version"),

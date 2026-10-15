@@ -32,7 +32,7 @@ from app.models.vehicle import Vehicle, FleetVehicleType, VehicleStatus
 from app.models.tour_manifest_line import TourManifestLine
 from app.models.supplier import Supplier
 from app.schemas.tour import ManifestLineRead, ReorderStopsRequest, TourCreate, TourGateUpdate, TourOperationsUpdate, TourRead, TourSchedule, TourStopInsert, TourStopRaq, TourStopUpdate, TourUpdate
-from app.api.deps import require_permission, get_user_region_ids
+from app.api.deps import require_permission, require_any_permission, get_user_region_ids
 from app.utils.fuel_pricing import load_fuel_unit_prices, price_for_contract, contract_fuel_type
 from app.services.cmro_extraction import CMRO_COLUMNS, CMRO_FIELDS, build_row as _build_cmro_row
 
@@ -539,9 +539,16 @@ async def list_tours(
     limit: int = Query(default=200, le=2000),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("tour-planning", "read")),
+    user: User = Depends(require_any_permission(
+        ("tour-planning", "read"), ("operations", "read"),
+    )),
 ):
-    """Lister les tours avec filtres / List tours with filters."""
+    """Lister les tours avec filtres / List tours with filters.
+
+    Lu par l'ordonnancement (`tour-planning:read`) ET par l'écran postier
+    (`operations:read`, ticket #107). Le périmètre reste borné par la région de
+    l'utilisateur quelle que soit la permission qui ouvre la porte.
+    """
     query = select(Tour).options(selectinload(Tour.stops))
     if date is not None:
         query = query.where(Tour.date == date)
@@ -2477,7 +2484,11 @@ async def reorder_tour_stops(
     tour_id: int,
     data: ReorderStopsRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("tour-planning", "update")),
+    # Réordonner, c'est modifier les arrêts : `tour-stop-modify:update` suffit,
+    # au même titre que l'ajout, le retrait et le changement d'EQC (#107).
+    user: User = Depends(require_any_permission(
+        ("tour-planning", "update"), ("tour-stop-modify", "update"),
+    )),
 ):
     """Permuter / réordonner les arrêts PDV d'un tour, avec recalcul des temps,
     km et coût. Réordonnancement manuel (pas de blocage fenêtre/chevauchement :
@@ -3765,9 +3776,16 @@ async def add_tour_stop(
 async def get_tour_manifest(
     tour_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("tours", "read")),
+    user: User = Depends(require_any_permission(
+        ("tour-planning", "read"), ("operations", "read"),
+    )),
 ):
-    """Lire le manifeste WMS d'un tour / Read WMS manifest for a tour."""
+    """Lire le manifeste WMS d'un tour / Read WMS manifest for a tour.
+
+    Gardé par `tours:read` jusqu'au ticket #107 — une ressource absente de
+    `RESOURCES` (`app/utils/auth.py`), donc qu'aucun rôle ne pouvait porter :
+    le manifeste n'était lisible que par un superadmin. Même oubli que #102.
+    """
     tour = await db.get(Tour, tour_id)
     if not tour:
         raise HTTPException(status_code=404, detail="Tour not found")

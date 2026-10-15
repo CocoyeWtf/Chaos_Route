@@ -10,7 +10,7 @@ from app.models.pdv import PDV
 from app.models.volume import Volume
 from app.models.user import User
 from app.schemas.volume import VolumeCreate, VolumeRead, VolumeSplit, VolumeUpdate
-from app.api.deps import require_permission, get_user_region_ids
+from app.api.deps import require_permission, require_any_permission, get_user_region_ids
 
 router = APIRouter()
 
@@ -27,7 +27,11 @@ async def list_volumes(
     limit: int = Query(default=500, le=5000),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("volumes", "read")),
+    # L'écran postier lit les volumes des tournées du jour pour afficher les
+    # températures et les EQC par arrêt : `operations:read` suffit (#107).
+    user: User = Depends(require_any_permission(
+        ("volumes", "read"), ("operations", "read"),
+    )),
 ):
     """Lister les volumes, avec filtres optionnels / List volumes with optional filters."""
     query = select(Volume)

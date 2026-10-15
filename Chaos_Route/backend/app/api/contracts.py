@@ -16,7 +16,7 @@ from app.schemas.contract import (
     ContractScheduleBase,
     ContractUpdate,
 )
-from app.api.deps import require_permission, get_user_region_ids
+from app.api.deps import require_permission, require_any_permission, get_user_region_ids
 
 router = APIRouter()
 
@@ -25,7 +25,11 @@ router = APIRouter()
 async def list_contracts(
     region_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("contracts", "read")),
+    # L'écran postier résout le nom du transporteur de chaque tournée depuis
+    # cette liste : `operations:read` suffit à la lire (#107).
+    user: User = Depends(require_any_permission(
+        ("contracts", "read"), ("operations", "read"),
+    )),
 ):
     query = select(Contract).options(selectinload(Contract.schedules), selectinload(Contract.carrier))
     if region_id is not None:

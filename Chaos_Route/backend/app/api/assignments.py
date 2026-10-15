@@ -111,7 +111,10 @@ async def return_device(
 async def delete_assignment(
     assignment_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("devices", "delete")),
+    # Reprendre un téléphone n'est pas supprimer l'appareil : `devices:update`
+    # au lieu de `devices:delete`, sans quoi le postier pouvait affecter un
+    # téléphone (devices:create) mais jamais le libérer (#107).
+    user: User = Depends(require_permission("devices", "update")),
 ):
     """Annuler affectation / Cancel assignment."""
     assignment = await db.get(DeviceAssignment, assignment_id)

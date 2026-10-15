@@ -317,7 +317,9 @@ async def _migrate_enum_values():
         ("dockeventtype", ["UNLOADING", "DOCK_LEFT", "SITE_LEFT"]),
         ("pickupstatus", ["CANCELLED"]),  # Annulation declaration combi remplacee
         ("vehicletype", ["PORTEUR_SURBAISSE"]),  # Porteur surbaisse ajoute apres coup
-        ("tourtype", ["TRANSFERT_PDV", "ENLEVEMENT_DEDIE"]),  # Transfert PDV a PDV + enlevement dedie ajoutes apres coup
+        # NAVETTE ajoutee au #43 : sans cette ligne, la premiere navette creee
+        # en production partirait en erreur sur une valeur d'enum inconnue.
+        ("tourtype", ["TRANSFERT_PDV", "ENLEVEMENT_DEDIE", "NAVETTE"]),
         # Cette liste est MANUELLE : elle ne se deduit pas des modeles. Une
         # valeur ajoutee a un Enum Python sans etre reportee ici manque en base,
         # et la premiere ecriture qui l'utilise part en erreur. Constate le

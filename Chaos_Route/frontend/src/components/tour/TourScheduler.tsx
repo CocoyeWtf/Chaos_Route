@@ -884,6 +884,54 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     }
   }
 
+  /* Navette inter-bases (#43) : déclarer l'arrivée, ou l'annuler.
+
+     L'arrivée est le moment — et le seul — où la marchandise change de base
+     (réponse 3 de Samuel). L'annulation ramène les volumes et laisse une
+     alerte, parce que quelqu'un a peut-être déjà planifié depuis l'autre base
+     (réponse 4). */
+  const handleNavetteArrive = async (tour: Tour) => {
+    const nouvelleDate = prompt(
+      `Arrivée de la navette ${tour.code}.\n\n`
+      + 'Les volumes basculent sur la base d\'arrivée et redeviennent planifiables.\n'
+      + 'Date de répartition : laisser vide pour conserver celle des volumes, '
+      + 'ou saisir une nouvelle date (AAAA-MM-JJ).',
+      '',
+    )
+    if (nouvelleDate === null) return
+    setScheduling(tour.id)
+    try {
+      const { data } = await api.post(`/tours/${tour.id}/navette/arrive`, {
+        new_dispatch_date: nouvelleDate.trim() || null,
+      })
+      alert(`${data.volumes_moved} volume(s) basculé(s) sur la base d'arrivée.`)
+      await loadData()
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      alert(detail || "Échec de la déclaration d'arrivée")
+    } finally {
+      setScheduling(null)
+    }
+  }
+
+  const handleNavetteCancel = async (tour: Tour) => {
+    if (!confirm(
+      `Annuler la navette ${tour.code} ?\n\n`
+      + 'Les volumes reviendront sur la base de départ et une alerte sera créée.',
+    )) return
+    setScheduling(tour.id)
+    try {
+      const { data } = await api.post(`/tours/${tour.id}/navette/cancel`)
+      alert(data.message)
+      await loadData()
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      alert(detail || "Échec de l'annulation")
+    } finally {
+      setScheduling(null)
+    }
+  }
+
   /* Annuler un tour (supprimer + libérer volumes) / Cancel a tour (delete + release volumes) */
   const handleCancel = async (tourId: number) => {
     if (!confirm('Annuler ce tour ? Les volumes seront libérés et le tour supprimé.')) return
@@ -2637,6 +2685,30 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                                 title="Modifier l'heure, le chauffeur ou le moyen sans annuler le tour"
                               >
                                 Modifier
+                              </button>
+                            )}
+                            {/* Navette inter-bases (#43) : l'arrivée est le seul
+                                moment où les volumes changent de base. */}
+                            {tour.tour_type === 'NAVETTE' && !tour.navette_arrived_at && (
+                              <button
+                                className="w-full px-1 py-0.5 rounded text-[10px] font-semibold border transition-all hover:opacity-80"
+                                style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}
+                                disabled={scheduling === tour.id}
+                                onClick={(e) => { e.stopPropagation(); handleNavetteArrive(tour) }}
+                                title="Déclarer l'arrivée : les volumes basculent sur la base d'arrivée"
+                              >
+                                Arrivée
+                              </button>
+                            )}
+                            {tour.tour_type === 'NAVETTE' && (
+                              <button
+                                className="w-full px-1 py-0.5 rounded text-[10px] border transition-all hover:opacity-80"
+                                style={{ borderColor: 'var(--color-warning)', color: 'var(--color-warning)' }}
+                                disabled={scheduling === tour.id}
+                                onClick={(e) => { e.stopPropagation(); handleNavetteCancel(tour) }}
+                                title="Annuler : les volumes reviennent sur la base de départ"
+                              >
+                                Annuler nav.
                               </button>
                             )}
                             {/* Plus de « Valider » par tournée (#97). Il voisinait

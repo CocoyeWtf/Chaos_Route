@@ -89,6 +89,7 @@ class TourBase(BaseModel):
     final_pickup_supplier_id: int | None = None
     final_pickup_duration_minutes: int | None = None
     final_pickup_done_at: str | None = None
+    navette_arrived_at: str | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool = False
@@ -152,6 +153,7 @@ class TourUpdate(BaseModel):
     final_pickup_supplier_id: int | None = None
     final_pickup_duration_minutes: int | None = None
     final_pickup_done_at: str | None = None
+    navette_arrived_at: str | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool | None = None
@@ -233,7 +235,8 @@ class TourSchedule(BaseModel):
     return_base_id: int | None = None       # base de retour si différente du départ (#64)
     final_pickup_supplier_id: int | None = None      # enlèvement fournisseur en fin de tournée (#74)
     final_pickup_duration_minutes: int | None = None
-    final_pickup_done_at: str | None = None  # temps sur place ; None = temps de quai
+    final_pickup_done_at: str | None = None
+    navette_arrived_at: str | None = None  # temps sur place ; None = temps de quai
 
     @model_validator(mode="after")
     def check_assignment(self) -> "TourSchedule":

@@ -193,7 +193,7 @@ export interface TourStop {
 }
 
 // Nature de tournée / Tour nature (LIVRAISON = livraison classique)
-export type TourType = 'LIVRAISON' | 'ENLEVEMENT' | 'VIDANGES' | 'DEPLACEMENT_BASE' | 'GARAGE' | 'TRANSFERT_PDV' | 'ENLEVEMENT_DEDIE'
+export type TourType = 'LIVRAISON' | 'ENLEVEMENT' | 'VIDANGES' | 'DEPLACEMENT_BASE' | 'GARAGE' | 'TRANSFERT_PDV' | 'ENLEVEMENT_DEDIE' | 'NAVETTE'
 
 export interface Tour {
   id: number
@@ -240,6 +240,8 @@ export interface Tour {
   dock_door_number?: string
   /* Tournee construite a l'avance, en attente de date : le « pot » (#92). */
   pooled?: boolean
+  /* Horodatage d'arrivee d'une navette inter-bases (#43). */
+  navette_arrived_at?: string | null
   trailer_ready_time?: string
   /* Heure de mise a quai du ZUR, jalon distinct de la semi (#45, #46). */
   zur_ready_time?: string
@@ -406,6 +408,7 @@ export const TOUR_TYPE_LABELS: Record<Exclude<TourType, 'LIVRAISON'>, string> = 
   GARAGE: 'Garage',
   TRANSFERT_PDV: 'Transfert PDV',
   ENLEVEMENT_DEDIE: 'Enlèvement dédié',
+  NAVETTE: 'Navette inter-bases',
 }
 
 /* ── Tickets (board transparent) ── */

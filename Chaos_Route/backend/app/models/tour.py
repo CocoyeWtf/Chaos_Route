@@ -35,6 +35,12 @@ class TourType(str, enum.Enum):
     GARAGE = "GARAGE"                  # Envoi au garage / atelier
     TRANSFERT_PDV = "TRANSFERT_PDV"    # Transfert de marchandises d'un PDV à un autre
     ENLEVEMENT_DEDIE = "ENLEVEMENT_DEDIE"  # Enlèvement dédié chez un fournisseur (distancier)
+    # Navette inter-bases belges (#43). Transporte des VOLUMES d'une base vers
+    # une autre pour qu'ils en repartent : Trazegnies -> Villers, expédition
+    # depuis Villers. Distincte du simple déplacement de véhicule, qui ne
+    # transporte rien, et de l'enlèvement ERT entre Avion et Gosselies, que
+    # Samuel exclut explicitement du périmètre.
+    NAVETTE = "NAVETTE"
 
 
 # Natures sans livraison (pas de contrôle volume/température, arrêts optionnels) /
@@ -42,6 +48,12 @@ class TourType(str, enum.Enum):
 NON_DELIVERY_TYPES = {
     TourType.ENLEVEMENT, TourType.VIDANGES, TourType.DEPLACEMENT_BASE,
     TourType.GARAGE, TourType.TRANSFERT_PDV, TourType.ENLEVEMENT_DEDIE,
+    # La navette (#43) transporte bien des volumes, mais elle ne LIVRE pas : il
+    # n'y a ni PDV ni controle de temperature a son bord, et le melange sec dans
+    # une tournee frais y est admis — Samuel : « c'est possible, il faut que
+    # l'application accepte, mais que ce soit signale ». Elle rejoint donc les
+    # natures sans livraison. / A shuttle carries volumes but delivers nothing.
+    TourType.NAVETTE,
 }
 # Natures de type reprise (collecte PDV, comme l'ancien is_pickup_tour) / Pickup-like natures
 PICKUP_TYPES = {TourType.ENLEVEMENT, TourType.VIDANGES}
@@ -124,6 +136,13 @@ class Tour(Base, TenantMixin):
     # ni sur la feuille de route, ni dans l'application du chauffeur.
     # / Manual confirmation by the driver; no QR to scan.
     final_pickup_done_at: Mapped[str | None] = mapped_column(String(32))
+
+    # Arrivee d'une navette (#43). Samuel, question 3 : « une fois arrivee
+    # seulement ». Tant que cet horodatage est vide, les volumes restent
+    # planifiables sur leur base d'origine ; une fois pose, ils ne le sont plus
+    # que sur la base d'arrivee. On ne bascule pas a la construction : une
+    # navette qui ne part jamais ne doit pas avoir deplace de marchandise.
+    navette_arrived_at: Mapped[str | None] = mapped_column(String(32))
     delivery_date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD — date de livraison
     temperature_type: Mapped[str | None] = mapped_column(String(10))  # SEC|FRAIS|GEL|BI_TEMP|TRI_TEMP
     is_pickup_tour: Mapped[bool] = mapped_column(Boolean, default=False)

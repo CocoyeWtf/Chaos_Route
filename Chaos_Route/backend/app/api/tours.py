@@ -1,6 +1,7 @@
 """Routes Tournées / Tour API routes."""
 
 import json
+import uuid
 import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -1730,6 +1731,310 @@ async def schedule_pooled_tours(
         "scheduled": sorties,
         "not_pooled": non_au_pot,
         "introuvables": [i for i in data.tour_ids if i not in trouves],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Navette inter-bases (#43)
+#
+# Samuel : « il faudrait rajouter un onglet Navette pour les situations ou la
+# marchandise est envoyee par exemple de Trazegnies vers Villers pour expedition
+# depuis Villers. Il faudrait ici pouvoir choisir les volumes de Trazegnies a
+# integrer dans cette navette, et que ces volumes basculent reellement sur les
+# volumes disponibles a Villers pour expedition depuis la-bas, et donc supprimes
+# des volumes disponibles a Trazegnies. »
+#
+# Ses quatre reponses de cadrage, qui dictent le comportement :
+#   1. la navette est attribuee a un contrat transporteur, comme une tournee ;
+#   2. le volume GARDE sa date de repartition, modifiable a la main ;
+#   3. la bascule prend effet « une fois arrivee seulement » ;
+#   4. a l'annulation, les volumes reviennent automatiquement, AVEC notification.
+#
+# Le point 3 est le plus structurant : tant que la navette n'est pas arrivee,
+# les volumes restent planifiables sur leur base d'origine. On ne deplace pas de
+# la marchandise sur une intention.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class NavetteCreate(BaseModel):
+    """Creer une navette entre deux bases (#43)."""
+    code: str | None = None
+    date: str
+    base_id: int                     # base de depart
+    destination_base_id: int         # base d'arrivee
+    volume_ids: list[int] = Field(default_factory=list)
+    vehicle_type: str | None = None
+    contract_id: int | None = None
+    departure_time: str | None = None
+    temperature_type: str | None = None
+    remarks: str | None = None
+
+
+class NavetteArriveRequest(BaseModel):
+    """Declarer l'arrivee, et donc basculer les volumes (#43)."""
+    timestamp: str | None = None
+    # Samuel, question 2 : la date de repartition est conservee par defaut mais
+    # « celle-ci doit pouvoir etre modifiee manuellement ».
+    new_dispatch_date: str | None = None
+
+
+def _melange_temperature(volumes: list[Volume], temperature_type: str | None) -> list[str]:
+    """Signaler un volume dont la temperature ne correspond pas a la navette.
+
+    Samuel : « un volume Sec transporte dans une tournee frais c'est possible,
+    il faut que l'application accepte, mais que ce soit signale ». On avertit
+    donc, on ne bloque pas — contrairement au garde-fou de base d'origine (#84),
+    qui lui interdit, parce qu'une base melangee fausse les kilometres.
+    """
+    if not temperature_type:
+        return []
+    classes = {v.temperature_class for v in volumes if v.temperature_class}
+    attendue = temperature_type.replace("MONO_", "").replace("BI_TEMP_", "")
+    etranges = [c for c in classes if c and c not in attendue]
+    if not etranges:
+        return []
+    return [
+        f"Temperatures melangees : {', '.join(sorted(etranges))} dans une navette "
+        f"{temperature_type}. Accepte, mais a surveiller."
+    ]
+
+
+@router.post("/navette", status_code=201)
+async def create_navette(
+    data: NavetteCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-planning", "create")),
+):
+    """Creer une navette et y rattacher des volumes (#43).
+
+    Les volumes sont rattaches a la navette — donc retires des volumes
+    planifiables — mais leur base d'origine ne change PAS encore : elle ne
+    changera qu'a l'arrivee.
+    """
+    if data.base_id == data.destination_base_id:
+        raise HTTPException(
+            status_code=400,
+            detail="La base d'arrivee doit etre differente de la base de depart",
+        )
+    depart = await db.get(BaseLogistics, data.base_id)
+    arrivee = await db.get(BaseLogistics, data.destination_base_id)
+    if not depart or not arrivee:
+        raise HTTPException(status_code=404, detail="Base introuvable")
+
+    volumes: list[Volume] = []
+    if data.volume_ids:
+        volumes = (await db.execute(
+            select(Volume).where(Volume.id.in_(data.volume_ids))
+        )).scalars().all()
+        introuvables = set(data.volume_ids) - {v.id for v in volumes}
+        if introuvables:
+            raise HTTPException(status_code=404, detail=f"Volumes introuvables : {sorted(introuvables)}")
+        deja_prises = [v.id for v in volumes if v.tour_id]
+        if deja_prises:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Volumes deja affectes a une tournee : {deja_prises}",
+            )
+        hors_base = [v.id for v in volumes
+                     if v.base_origin_id is not None and v.base_origin_id != data.base_id]
+        if hors_base:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"Volumes qui ne partent pas de {depart.code} : {hors_base}. "
+                        "Une navette part d'une seule base."),
+            )
+
+    avertissements = _melange_temperature(volumes, data.temperature_type)
+
+    tour = Tour(
+        # Suffixe aleatoire : deux navettes creees dans la meme seconde
+        # entraient en collision sur l'unicite du code, et la creation tombait
+        # en 500. / Random suffix: same-second creations collided.
+        code=data.code or f"NAV-{int(datetime.now().timestamp())}-{uuid.uuid4().hex[:4].upper()}",
+        date=data.date,
+        delivery_date=data.date,
+        base_id=data.base_id,
+        # La navette se TERMINE sur la base d'arrivee : c'est exactement ce que
+        # `return_base_id` exprime depuis le #64, kilometres compris.
+        return_base_id=data.destination_base_id,
+        tour_type=TourType.NAVETTE,
+        status=TourStatus.DRAFT,
+        vehicle_type=data.vehicle_type,
+        contract_id=data.contract_id,
+        departure_time=data.departure_time,
+        temperature_type=data.temperature_type,
+        remarks=data.remarks,
+        total_eqp=sum(float(v.eqp_count or 0) for v in volumes),
+    )
+    db.add(tour)
+    await db.flush()
+
+    for v in volumes:
+        v.tour_id = tour.id
+
+    await _log_audit(db, "tour", tour.id, "CREATE_NAVETTE", user, {
+        "base_id": data.base_id,
+        "destination_base_id": data.destination_base_id,
+        "volume_ids": [v.id for v in volumes],
+    })
+    await db.flush()
+
+    return {
+        "id": tour.id,
+        "code": tour.code,
+        "base_id": tour.base_id,
+        "destination_base_id": data.destination_base_id,
+        "volumes_count": len(volumes),
+        "total_eqp": float(tour.total_eqp or 0),
+        "warnings": avertissements,
+    }
+
+
+@router.post("/{tour_id}/navette/arrive")
+async def navette_arrive(
+    tour_id: int,
+    data: NavetteArriveRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-planning", "update")),
+):
+    """Declarer l'arrivee : les volumes basculent sur la base d'arrivee (#43).
+
+    C'est ici, et seulement ici, que la marchandise change de base — reponse 3
+    de Samuel. Les volumes sont detaches de la navette pour redevenir
+    planifiables, cette fois depuis la base d'arrivee.
+    """
+    tour = await db.get(Tour, tour_id)
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    if tour.tour_type != TourType.NAVETTE:
+        raise HTTPException(status_code=422, detail="Cette tournee n'est pas une navette")
+    if tour.navette_arrived_at:
+        return {"status": "already_arrived", "arrived_at": tour.navette_arrived_at}
+
+    destination = return_base_of(tour)
+    volumes = (await db.execute(
+        select(Volume).where(Volume.tour_id == tour.id)
+    )).scalars().all()
+
+    for v in volumes:
+        v.base_origin_id = destination
+        # Reponse 2 : la date de repartition est conservee, sauf demande expresse.
+        if data.new_dispatch_date:
+            v.dispatch_date = data.new_dispatch_date
+        # Detaches de la navette : ils redeviennent planifiables, depuis l'autre base.
+        v.tour_id = None
+
+    tour.navette_arrived_at = data.timestamp or datetime.now().isoformat(timespec="seconds")
+    tour.status = TourStatus.COMPLETED
+
+    await _log_audit(db, "tour", tour.id, "NAVETTE_ARRIVED", user, {
+        "destination_base_id": destination,
+        "volumes": [v.id for v in volumes],
+        "new_dispatch_date": data.new_dispatch_date,
+    })
+    await db.flush()
+    return {
+        "status": "ok",
+        "arrived_at": tour.navette_arrived_at,
+        "destination_base_id": destination,
+        "volumes_moved": len(volumes),
+    }
+
+
+@router.post("/{tour_id}/navette/cancel")
+async def navette_cancel(
+    tour_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-planning", "update")),
+):
+    """Annuler une navette : les volumes reviennent a leur base (#43).
+
+    Reponse 4 de Samuel : « si la navette est annulee, les volumes reviennent
+    automatiquement a Trazegnie, avec une notification pour prevenir de
+    l'action ». La notification compte autant que le retour lui-meme : quelqu'un
+    a peut-etre deja planifie ces volumes au depart de Villers.
+    """
+    tour = await db.get(Tour, tour_id)
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    if tour.tour_type != TourType.NAVETTE:
+        raise HTTPException(status_code=422, detail="Cette tournee n'est pas une navette")
+
+    origine = tour.base_id
+    base_origine = await db.get(BaseLogistics, origine)
+
+    # Deux cas : navette pas encore arrivee (volumes encore rattaches), ou deja
+    # arrivee (volumes relaches sur la base d'arrivee, qu'il faut rapatrier).
+    if tour.navette_arrived_at:
+        destination = return_base_of(tour)
+        journal = json.loads(
+            (await db.execute(
+                select(AuditLog.changes)
+                .where(AuditLog.entity_type == "tour", AuditLog.entity_id == tour.id,
+                       AuditLog.action == "NAVETTE_ARRIVED")
+                .order_by(AuditLog.id.desc()).limit(1)
+            )).scalar() or "{}"
+        )
+        ids = journal.get("volumes", [])
+        volumes = (await db.execute(
+            select(Volume).where(Volume.id.in_(ids))
+        )).scalars().all() if ids else []
+        deja_replanifies = [v.id for v in volumes if v.tour_id]
+    else:
+        destination = None
+        volumes = (await db.execute(
+            select(Volume).where(Volume.tour_id == tour.id)
+        )).scalars().all()
+        deja_replanifies = []
+
+    for v in volumes:
+        v.base_origin_id = origine
+        if v.tour_id == tour.id:
+            v.tour_id = None
+
+    tour.status = TourStatus.DRAFT
+    tour.navette_arrived_at = None
+
+    # Notification : la file d'alertes operationnelles existe pour ce genre de
+    # passage d'information entre equipes.
+    from app.models.operational_alert import (
+        AlertPriority, AlertStatus, AlertType, OperationalAlert,
+    )
+    message = (
+        f"Navette {tour.code} annulee : {len(volumes)} volume(s) sont revenus sur "
+        f"{base_origine.code if base_origine else origine}."
+    )
+    if deja_replanifies:
+        message += (
+            f" ATTENTION : {len(deja_replanifies)} d'entre eux etaient deja "
+            f"planifies au depart de l'autre base (volumes {deja_replanifies})."
+        )
+    alerte = OperationalAlert(
+        alert_type=AlertType.VOLUMES_RELEASED,
+        status=AlertStatus.PENDING,
+        priority=AlertPriority.HIGH if deja_replanifies else AlertPriority.MEDIUM,
+        title=f"Navette {tour.code} annulee",
+        message=message,
+        tour_id=tour.id,
+        tour_code=tour.code,
+        base_id=origine,
+    )
+    alerte.tenant_id = tour.tenant_id
+    db.add(alerte)
+
+    await _log_audit(db, "tour", tour.id, "NAVETTE_CANCELLED", user, {
+        "retour_base_id": origine,
+        "destination_annulee": destination,
+        "volumes": [v.id for v in volumes],
+        "deja_replanifies": deja_replanifies,
+    })
+    await db.flush()
+    return {
+        "status": "ok",
+        "volumes_returned": len(volumes),
+        "base_id": origine,
+        "already_replanned": deja_replanifies,
+        "message": message,
     }
 
 

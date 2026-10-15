@@ -19,7 +19,7 @@ import { create } from '../../services/api'
 import api from '../../services/api'
 import type { VehicleType, TemperatureType, TemperatureClass, Volume, PDV, BaseLogistics, Tour, TourStop, DistanceEntry, Contract, PdvPickupSummary, Supplier } from '../../types'
 import type { PdvVolumeStatus } from '../map/PdvMarker'
-import { VEHICLE_TYPE_DEFAULTS, SELECTABLE_VEHICLE_TYPES, TEMPERATURE_TYPE_LABELS, suggestVehicleType } from '../../types'
+import { VEHICLE_TYPE_DEFAULTS, SELECTABLE_VEHICLE_TYPES, TEMPERATURE_TYPE_LABELS, suggestVehicleType, TEMPERATURE_COLORS } from '../../types'
 import { getRequiredTemperatureType, checkTemperatureCompatibility } from '../../utils/temperatureUtils'
 import { getApiErrorMessage } from '../../utils/apiError'
 
@@ -50,8 +50,13 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const [tourMode, setTourMode] = useState<TourMode>('delivery')
   // Nature en mode reprise (Enlèvement/Vidanges) et mouvement (Déplacement/Garage)
   const [pickupNature, setPickupNature] = useState<'ENLEVEMENT' | 'VIDANGES'>('ENLEVEMENT')
-  const [movementNature, setMovementNature] = useState<'DEPLACEMENT_BASE' | 'GARAGE' | 'TRANSFERT_PDV' | 'ENLEVEMENT_DEDIE'>('DEPLACEMENT_BASE')
+  const [movementNature, setMovementNature] = useState<'DEPLACEMENT_BASE' | 'GARAGE' | 'TRANSFERT_PDV' | 'ENLEVEMENT_DEDIE' | 'NAVETTE'>('DEPLACEMENT_BASE')
   const [movementDestination, setMovementDestination] = useState('')
+  /* Navette inter-bases (#43) : base d'arrivee et volumes embarques. */
+  const [navetteDestBaseId, setNavetteDestBaseId] = useState<number | null>(null)
+  const [navetteVolumeIds, setNavetteVolumeIds] = useState<Set<number>>(new Set())
+  const [navetteContractId, setNavetteContractId] = useState<number | null>(null)
+  const [navetteDepartureTime, setNavetteDepartureTime] = useState('')
   // Commentaire libre (mouvement + transfert) / Free comment (movement + transfer)
   const [movementComment, setMovementComment] = useState('')
   // Enlèvement dédié : fournisseur (distancier), chauffeur PARC (base) + créneau
@@ -919,6 +924,24 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
      PDV à PDV (2 arrêts : origine = chargement, destination = dépose) /
      Create a movement tour (base move / garage, stopless) or a PDV-to-PDV
      transfer (2 stops: origin = loading, destination = drop-off) */
+  /* Volumes embarquables dans une navette (#43).
+
+     « Il faudrait ici pouvoir choisir les volumes de Trazegnies a integrer dans
+     cette navette » : on propose donc les volumes NON encore affectes de la
+     base de depart, toutes temperatures confondues — Samuel accepte le melange,
+     il demande seulement qu'il soit signale. */
+  const navetteVolumesDispo = useMemo(() => {
+    if (movementNature !== 'NAVETTE' || !manualBaseId) return []
+    return allDayVolumes.filter((v) => v.base_origin_id === manualBaseId && !v.tour_id)
+  }, [movementNature, manualBaseId, allDayVolumes])
+
+  const navetteEqpTotal = useMemo(
+    () => navetteVolumesDispo
+      .filter((v) => navetteVolumeIds.has(v.id))
+      .reduce((somme, v) => somme + Number(v.eqp_count || 0), 0),
+    [navetteVolumesDispo, navetteVolumeIds],
+  )
+
   const handleCreateMovement = async () => {
     if (!selectedVehicleType || !manualBaseId) return
 
@@ -962,6 +985,42 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       } catch (e: unknown) {
         console.error('Failed to create dedicated pickup', e)
         alert(`Echec de la création de l'enlèvement dédié: ${getApiErrorMessage(e)}`)
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
+
+    /* Navette inter-bases (#43) : endpoint dedie, parce qu'elle embarque des
+       volumes et que leur bascule obeit a des regles propres — elle ne prend
+       effet qu'a l'arrivee, et l'annulation les rend automatiquement. */
+    if (movementNature === 'NAVETTE') {
+      if (!manualBaseId || !navetteDestBaseId) return
+      setSaving(true)
+      try {
+        const { data } = await api.post('/tours/navette', {
+          date: selectedDate,
+          base_id: manualBaseId,
+          destination_base_id: navetteDestBaseId,
+          volume_ids: [...navetteVolumeIds],
+          vehicle_type: selectedVehicleType,
+          contract_id: navetteContractId,
+          departure_time: navetteDepartureTime || null,
+          temperature_type: selectedTemperatureType,
+          remarks: movementComment || null,
+        })
+        if (data.warnings?.length) alert(data.warnings.join('\n'))
+        setNavetteDestBaseId(null)
+        setNavetteVolumeIds(new Set())
+        setNavetteContractId(null)
+        setNavetteDepartureTime('')
+        setMovementComment('')
+        setSelectedVehicleType(null)
+        setCapacityEqp(0)
+        refetchVolumes()
+      } catch (e: unknown) {
+        console.error('Failed to create navette', e)
+        alert(`Echec de la création de la navette: ${getApiErrorMessage(e)}`)
       } finally {
         setSaving(false)
       }
@@ -1212,7 +1271,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
               <select
                 value={movementNature}
                 onChange={(e) => {
-                  const nat = e.target.value as 'DEPLACEMENT_BASE' | 'GARAGE' | 'TRANSFERT_PDV' | 'ENLEVEMENT_DEDIE'
+                  const nat = e.target.value as 'DEPLACEMENT_BASE' | 'GARAGE' | 'TRANSFERT_PDV' | 'ENLEVEMENT_DEDIE' | 'NAVETTE'
                   setMovementNature(nat)
                   // Pré-remplir le commentaire « Chauffeur PARC » pour l'enlèvement dédié /
                   // Prefill the "Chauffeur PARC" comment for the dedicated pickup
@@ -1225,6 +1284,11 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                     d'une même base. Le libellé « déplacement base » laissait
                     croire qu'on pouvait y faire les navettes entre bases. */}
                 <option value="DEPLACEMENT_BASE">Chauffeur parc</option>
+                {/* Navette entre bases belges (#43) : contrairement au
+                    « chauffeur parc », elle TRANSPORTE des volumes, qui
+                    repartiront de la base d'arrivee. Distincte aussi de
+                    l'enlevement ERT Avion → Gosselies, que Samuel exclut. */}
+                <option value="NAVETTE">Navette inter-bases</option>
                 <option value="GARAGE">Garage / atelier</option>
                 <option value="TRANSFERT_PDV">Transfert PDV à PDV</option>
                 <option value="ENLEVEMENT_DEDIE">Enlèvement dédié</option>
@@ -1352,6 +1416,54 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                   />
                 </div>
               </>
+            ) : movementNature === 'NAVETTE' ? (
+              /* Navette inter-bases (#43) : une base d'arrivee, un transporteur
+                 et des volumes embarques. Rien de tout cela n'a de sens pour un
+                 simple deplacement de vehicule, d'ou un bloc a part. */
+              <>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                    Base d&apos;arrivée *
+                  </label>
+                  <select
+                    value={navetteDestBaseId ?? ''}
+                    onChange={(e) => setNavetteDestBaseId(e.target.value ? Number(e.target.value) : null)}
+                    className="rounded-lg border px-3 py-2 text-sm"
+                    style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  >
+                    <option value="">-- Base --</option>
+                    {bases.filter((b) => b.id !== manualBaseId).map((b) => (
+                      <option key={b.id} value={b.id}>{b.code} — {b.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                    Transporteur
+                  </label>
+                  <select
+                    value={navetteContractId ?? ''}
+                    onChange={(e) => setNavetteContractId(e.target.value ? Number(e.target.value) : null)}
+                    className="rounded-lg border px-3 py-2 text-sm"
+                    style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  >
+                    <option value="">-- Contrat --</option>
+                    {contracts.map((c) => (
+                      <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Départ</label>
+                  <input
+                    type="time"
+                    value={navetteDepartureTime}
+                    onChange={(e) => setNavetteDepartureTime(e.target.value)}
+                    className="rounded-lg border px-3 py-2 text-sm"
+                    style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  />
+                </div>
+              </>
             ) : (
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Destination</label>
@@ -1384,15 +1496,83 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                 !selectedVehicleType || !manualBaseId || saving
                 || (movementNature === 'TRANSFERT_PDV' && (!transfertOriginPdvId || !transfertDestPdvId))
                 || (movementNature === 'ENLEVEMENT_DEDIE' && (!dedicatedSupplierId || !dedicatedStartTime))
+                || (movementNature === 'NAVETTE' && !navetteDestBaseId)
               }
               onClick={handleCreateMovement}
             >
               {saving ? '...' : (
                 movementNature === 'TRANSFERT_PDV' ? 'Créer le transfert'
                 : movementNature === 'ENLEVEMENT_DEDIE' ? 'Créer l\'enlèvement'
+                : movementNature === 'NAVETTE' ? 'Créer la navette'
                 : 'Créer le mouvement'
               )}
             </button>
+
+            {/* Volumes embarqués dans la navette (#43). Ils ne changent pas de
+                base tout de suite : la bascule n'a lieu qu'à l'arrivée, réponse
+                3 de Samuel. En attendant, ils sortent simplement des volumes
+                planifiables au départ. */}
+            {movementNature === 'NAVETTE' && manualBaseId && (
+              <div className="w-full mt-3 rounded-xl border p-3"
+                style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    Volumes embarqués
+                  </span>
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {navetteVolumeIds.size} sélectionné(s) · {navetteEqpTotal.toFixed(2)} EQC
+                  </span>
+                  <button
+                    onClick={() => setNavetteVolumeIds(new Set(navetteVolumesDispo.map((v) => v.id)))}
+                    className="ml-auto px-2 py-0.5 rounded text-[11px]"
+                    style={{ border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                    Tout
+                  </button>
+                  <button
+                    onClick={() => setNavetteVolumeIds(new Set())}
+                    className="px-2 py-0.5 rounded text-[11px]"
+                    style={{ border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                    Aucun
+                  </button>
+                </div>
+                {navetteVolumesDispo.length === 0 ? (
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Aucun volume disponible sur cette base pour la journée affichée.
+                  </p>
+                ) : (
+                  <div className="grid gap-1 max-h-48 overflow-auto"
+                    style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
+                    {navetteVolumesDispo.map((v) => {
+                      const pdv = pdvMap.get(v.pdv_id)
+                      return (
+                        <label key={v.id} className="flex items-center gap-2 text-xs px-1 py-0.5 cursor-pointer"
+                          style={{ color: 'var(--text-primary)' }}>
+                          <input type="checkbox" checked={navetteVolumeIds.has(v.id)}
+                            onChange={() => setNavetteVolumeIds((p) => {
+                              const n = new Set(p)
+                              if (n.has(v.id)) n.delete(v.id)
+                              else n.add(v.id)
+                              return n
+                            })} />
+                          <span className="font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                            {pdv?.code ?? v.pdv_id}
+                          </span>
+                          <span className="truncate flex-1">{pdv?.name ?? ''}</span>
+                          <span className="px-1 rounded text-[9px] font-bold"
+                            style={{
+                              backgroundColor: `${TEMPERATURE_COLORS[v.temperature_class]}22`,
+                              color: TEMPERATURE_COLORS[v.temperature_class],
+                            }}>
+                            {v.temperature_class}
+                          </span>
+                          <span style={{ color: 'var(--text-muted)' }}>{Number(v.eqp_count).toFixed(2)}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
 

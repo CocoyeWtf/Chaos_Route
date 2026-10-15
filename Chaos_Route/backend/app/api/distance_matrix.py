@@ -310,6 +310,11 @@ async def fill_missing_distances(
     dry_run: bool = Query(default=True, description="Simuler sans ecrire"),
     factor: float = Query(default=1.3, ge=1.0, le=2.0,
                           description="Coefficient vol d'oiseau vers route"),
+    only_twin: bool = Query(
+        default=False,
+        description="N'ecrire QUE les trajets repris d'une base situee au meme "
+                    "endroit, sans aucune estimation",
+    ),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("distances", "create")),
 ):
@@ -357,11 +362,21 @@ async def fill_missing_distances(
                 continue
 
             # 1. Base jumelle au meme endroit : on recopie la vraie valeur.
+            # On prefere une ligne MESUREE : recopier l'estimation d'une jumelle
+            # propagerait une approximation en la faisant passer pour acquise.
             source = None
             for jumelle in jumelles:
-                source = connues.get((jumelle.id, pdv.id))
-                if source is not None:
+                candidate = connues.get((jumelle.id, pdv.id))
+                if candidate is None:
+                    continue
+                if not candidate.is_estimated:
+                    source = candidate
                     break
+                if source is None:
+                    source = candidate
+            # En mode « copie seule », on refuse de propager une estimation.
+            if source is not None and only_twin and source.is_estimated:
+                source = None
 
             if source is not None:
                 ligne = DistanceMatrix(
@@ -373,6 +388,13 @@ async def fill_missing_distances(
                 )
                 stats["copiees"] += 1
                 copiees += 1
+            elif only_twin:
+                # Mode « copie seule » : on refuse d'estimer. Sert a completer une
+                # base jumelle — Gosselies MEA depuis Gosselies SEC — sans
+                # introduire la moindre approximation dans le referentiel pour
+                # les quelques PDV que la jumelle ne couvre pas non plus.
+                stats["impossibles"] += 1
+                continue
             else:
                 # 2. Estimation routiere, a condition d'avoir les coordonnees.
                 if None in (base.latitude, base.longitude, pdv.latitude, pdv.longitude):
@@ -407,6 +429,7 @@ async def fill_missing_distances(
     return {
         "dry_run": dry_run,
         "factor": factor,
+        "only_twin": only_twin,
         "copiees_depuis_base_jumelle": copiees,
         "estimees": estimees,
         "impossibles": len(impossibles),

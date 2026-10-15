@@ -253,3 +253,42 @@ async def test_une_vraie_distance_remplace_l_estimation(
     assert len(lignes) == 1, "le distancier est symetrique : une seule ligne par paire"
     assert float(lignes[0][0]) == 31.5
     assert bool(lignes[0][1]) is False
+
+
+@pytest.mark.asyncio
+async def test_le_mode_copie_seule_refuse_d_estimer(
+    client, db_session, deux_bases_au_meme_endroit, un_pdv,
+):
+    """Completer Gosselies MEA depuis Gosselies SEC doit n'introduire AUCUNE
+    approximation : les quelques PDV que la jumelle ne couvre pas non plus sont
+    laisses vides plutot qu'estimes."""
+    from sqlalchemy import select
+    from app.models.distance_matrix import DistanceMatrix
+
+    sec, mea, _ = deux_bases_au_meme_endroit
+    # La jumelle ne couvre PAS ce PDV : rien ne doit etre ecrit pour lui.
+    resp = await client.post("/api/distance-matrix/fill-missing",
+                             params={"base_id": mea.id, "dry_run": False,
+                                     "only_twin": True})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["estimees"] == 0
+    assert data["only_twin"] is True
+
+    # On cible CE PDV : la base de test est partagee, et d'autres bases creees
+    # par les tests precedents partagent les memes coordonnees — leurs lignes
+    # sont de vraies copies, pas des estimations.
+    lignes = (await db_session.execute(
+        select(DistanceMatrix.is_estimated).where(
+            DistanceMatrix.origin_type == "BASE", DistanceMatrix.origin_id == mea.id,
+            DistanceMatrix.destination_id == un_pdv.id,
+        )
+    )).all()
+    assert lignes == [], "aucune estimation ne doit etre posee en mode copie seule"
+
+    toutes = (await db_session.execute(
+        select(DistanceMatrix.is_estimated).where(
+            DistanceMatrix.origin_type == "BASE", DistanceMatrix.origin_id == mea.id,
+        )
+    )).scalars().all()
+    assert not any(toutes), "aucune ligne estimee ne doit exister pour cette base"

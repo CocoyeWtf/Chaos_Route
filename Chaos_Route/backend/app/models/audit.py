@@ -1,6 +1,6 @@
 """Modèle Historique / Audit log model."""
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -13,6 +13,14 @@ class AuditLog(Base, TenantMixin):
     Un compte consolidation/superadmin (tenant None) voit tout. /
     Tenant-scoped audit log (auto-stamped + auto-filtered)."""
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        # Le journal se lit toujours « l'historique de CET objet » : l'ecran
+        # d'audit filtre sur le type et l'identifiant, et le code le fait aussi
+        # (annulation d'une navette, #43). Sans index, chaque lecture balayait
+        # les 145 000 lignes. Meme classe de correctif que le distancier, en
+        # plus petit : 174 balayages pour 9,8 millions de lignes lues.
+        Index("ix_audit_logs_entity", "entity_type", "entity_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)

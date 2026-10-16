@@ -27,6 +27,7 @@ from app.models.tour import Tour, TourStatus, TourType, PICKUP_TYPES, return_bas
 from app.models.tour_stop import TourStop
 from app.models.tour_surcharge import TourSurcharge, SurchargeStatus
 from app.models.volume import Volume
+from app.models.base_driver import BaseDriver
 from app.models.base_logistics import BaseLogistics
 from app.models.user import User
 from app.models.pickup_request import PickupRequest, PickupLabel, PickupStatus, PickupType, LabelStatus
@@ -2035,6 +2036,186 @@ async def navette_cancel(
         "base_id": origine,
         "already_replanned": deja_replanifies,
         "message": message,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Feuille de travail : affecter les chauffeurs en lot (#89)
+#
+# Gaetan : « le RCAM affecte les chauffeurs de la bulle bleue a un tour en les
+# glissant-deposant dans la colonne Chauffeurs. Apres chaque affectation, la
+# feuille calcule le nombre de tours, le temps effectue et restant, ainsi que
+# les kilometres parcourus. Une pre-validation controle les eventuelles erreurs
+# avant d'appliquer les changements a l'ecran principal. »
+#
+# D'ou deux modes sur un seul endpoint : `dry_run` controle et annonce, l'appel
+# ferme applique. Les controles portent sur ce qu'une feuille de calcul ne peut
+# pas voir — le chevauchement horaire reel et le regime de travail du jour.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class DriverAssignment(BaseModel):
+    """Une affectation chauffeur -> tournee (#89)."""
+    tour_id: int
+    # Vide = retirer le chauffeur de la tournee.
+    driver_name: str | None = None
+    driver_code_infolog: str | None = None
+
+
+class AssignDriversRequest(BaseModel):
+    assignments: list[DriverAssignment] = Field(min_length=1, max_length=300)
+    dry_run: bool = True
+
+
+def _travaille_ce_jour(work_days: str | None, iso_date: str | None) -> bool:
+    """Le chauffeur travaille-t-il ce jour-la ? (#33) Regime vide = oui."""
+    if not work_days or not iso_date:
+        return True
+    try:
+        jour = datetime.strptime(iso_date, "%Y-%m-%d")
+    except ValueError:
+        return True
+    codes = ["LUN", "MAR", "MER", "JEU", "VEN", "SAM", "DIM"]
+    return codes[jour.weekday()] in {
+        x.strip().upper() for x in work_days.split(",") if x.strip()
+    }
+
+
+@router.post("/assign-drivers")
+async def assign_drivers(
+    data: AssignDriversRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-planning", "update")),
+):
+    """Affecter plusieurs chauffeurs d'un coup, avec pre-validation (#89).
+
+    Les erreurs signalees sont celles qu'une feuille de calcul ne verrait pas :
+
+    - CHEVAUCHEMENT : le meme chauffeur sur deux tournees qui se recouvrent. Le
+      controle porte sur la timeline absolue (jour de livraison + heure), donc
+      deux tournees de jours differents ne se chevauchent jamais meme a heures
+      proches — c'est le helper deja utilise par l'ordonnancement.
+    - REPOS : le chauffeur ne travaille pas ce jour-la (#33). Signale, jamais
+      bloquant : un remplacement doit rester possible, et c'est precisement le
+      genre de chose qu'on decide a la main sur une feuille de travail.
+
+    Rien n'est bloque : on annonce, le RCAM tranche. Bloquer une affectation
+    depuis une vue de planification reviendrait a lui demander de sortir de
+    l'ecran pour contourner l'outil cense l'aider.
+    """
+    ids = [a.tour_id for a in data.assignments]
+    tours = (await db.execute(
+        select(Tour).where(Tour.id.in_(ids)).options(selectinload(Tour.stops))
+    )).scalars().all()
+    par_id = {t.id: t for t in tours}
+    introuvables = [i for i in ids if i not in par_id]
+
+    # Etat projete : affectations demandees + tournees du jour deja affectees.
+    dates = {t.delivery_date or t.date for t in tours}
+    voisines = (await db.execute(
+        select(Tour).where(
+            Tour.id.notin_(ids),
+            Tour.driver_name.isnot(None),
+            Tour.date.in_({t.date for t in tours}) if tours else Tour.id == -1,
+        )
+    )).scalars().all() if tours else []
+
+    chauffeurs = {
+        f"{d.last_name} {d.first_name}": d
+        for d in (await db.execute(select(BaseDriver))).scalars().all()
+    }
+
+    projete: list[tuple[str, Tour]] = [
+        (t.driver_name, t) for t in voisines if t.driver_name
+    ]
+    for a in data.assignments:
+        tour = par_id.get(a.tour_id)
+        if tour is None or not a.driver_name:
+            continue
+        projete.append((a.driver_name, tour))
+
+    alertes: list[dict] = []
+
+    # Chevauchements, chauffeur par chauffeur.
+    par_chauffeur: dict[str, list[Tour]] = {}
+    for nom, tour in projete:
+        par_chauffeur.setdefault(nom, []).append(tour)
+    for nom, liste in par_chauffeur.items():
+        liste = [t for t in liste if t.departure_time and t.return_time]
+        for i in range(len(liste)):
+            for j in range(i + 1, len(liste)):
+                a_, b_ = liste[i], liste[j]
+                if tours_time_overlap(
+                    a_.delivery_date or a_.date, a_.departure_time, a_.return_time,
+                    b_.delivery_date or b_.date, b_.departure_time, b_.return_time,
+                ):
+                    alertes.append({
+                        "type": "CHEVAUCHEMENT",
+                        "driver_name": nom,
+                        "tour_codes": [a_.code, b_.code],
+                        "message": (
+                            f"{nom} est sur {a_.code} ({a_.departure_time}-{a_.return_time}) "
+                            f"et {b_.code} ({b_.departure_time}-{b_.return_time}) en meme temps."
+                        ),
+                    })
+
+    # Regime de travail.
+    for a in data.assignments:
+        tour = par_id.get(a.tour_id)
+        if tour is None or not a.driver_name:
+            continue
+        d = chauffeurs.get(a.driver_name)
+        if d and not _travaille_ce_jour(d.work_days, tour.delivery_date or tour.date):
+            alertes.append({
+                "type": "REPOS",
+                "driver_name": a.driver_name,
+                "tour_codes": [tour.code],
+                "message": (
+                    f"{a.driver_name} ne travaille pas le "
+                    f"{tour.delivery_date or tour.date} ({d.work_days})."
+                ),
+            })
+
+    # Recapitulatif par chauffeur : nombre de tours, temps, kilometres.
+    recap: dict[str, dict] = {}
+    for nom, liste in par_chauffeur.items():
+        recap[nom] = {
+            "tours": len(liste),
+            "minutes": sum(int(t.total_duration_minutes or 0) for t in liste),
+            "km": round(sum(float(t.total_km or 0) for t in liste), 2),
+        }
+
+    if data.dry_run:
+        return {
+            "dry_run": True,
+            "alertes": alertes,
+            "recap": recap,
+            "introuvables": introuvables,
+            "dates": sorted(d for d in dates if d),
+        }
+
+    modifies = 0
+    for a in data.assignments:
+        tour = par_id.get(a.tour_id)
+        if tour is None:
+            continue
+        if tour.driver_name == (a.driver_name or None):
+            continue
+        ancien = tour.driver_name
+        tour.driver_name = a.driver_name or None
+        tour.driver_code_infolog = a.driver_code_infolog or None
+        modifies += 1
+        await _log_audit(db, "tour", tour.id, "ASSIGN_DRIVER", user, {
+            "ancien": ancien, "nouveau": a.driver_name,
+        })
+
+    await db.flush()
+    return {
+        "dry_run": False,
+        "modifies": modifies,
+        "alertes": alertes,
+        "recap": recap,
+        "introuvables": introuvables,
     }
 
 

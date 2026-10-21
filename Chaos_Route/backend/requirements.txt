@@ -1,6 +1,6 @@
 # Web framework
-fastapi>=0.141.1
-uvicorn[standard]>=0.53.0
+fastapi>=0.144.0
+uvicorn[standard]>=0.54.0
 python-multipart>=0.0.32
 
 # Database
@@ -16,15 +16,15 @@ python-multipart>=0.0.32
 # frontiere de securite, elle ne change pas de version par accident. /
 # [asyncio] pulls greenlet (2.1 no longer does); the <2.1 ceiling is
 # deliberate: tenant isolation rides on SQLAlchemy events.
-sqlalchemy[asyncio]>=2.0.54,<2.1
+sqlalchemy[asyncio]>=2.1.5,<2.2
 alembic>=1.20.0
 aiosqlite>=0.22.1
-asyncpg>=0.31.0
+asyncpg>=0.32.0
 
 # Authentication
 # PyJWT remplace python-jose : dependance ecdsa vulnerable sans correctif
 # (PYSEC-2026-1325) et projet non maintenu / PyJWT replaces python-jose
-PyJWT>=2.14.0
+PyJWT>=2.15.1
 bcrypt>=5.0.0
 pyotp>=2.10.0
 
@@ -32,8 +32,8 @@ pyotp>=2.10.0
 slowapi>=0.1.10
 
 # Validation
-pydantic>=2.13.5
-pydantic-settings>=2.15.0
+pydantic>=2.14.1
+pydantic-settings>=2.16.0
 email-validator>=2.3.0
 
 # Email

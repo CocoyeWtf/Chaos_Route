@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install backend deps
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -c constraints.txt
       - name: Run adversarial tenant-isolation matrix
         run: |
           python -m pytest -q \

@@ -78,8 +78,9 @@ export function PooledToursPanel({ bases, targetDate, onScheduled }: Props) {
     }
   }
 
-  /* Pas de pot, pas de bouton : on n'encombre pas la barre pour rien. */
-  if (count === 0 && !open) return null
+  /* Le bouton reste visible même pot vide (#112) : masqué, personne ne
+     découvrait la fonction — Gaetan l'a cherché sans le trouver. /
+     Always shown, otherwise the feature can't be discovered. */
 
   return (
     <>

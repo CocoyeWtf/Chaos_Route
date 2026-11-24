@@ -69,15 +69,17 @@ def _ligne(ws, entetes: dict, code: str) -> int:
 # ─── Exports : la colonne technique doit etre la ───
 
 @pytest.mark.asyncio
-async def test_l_export_wms_porte_le_code_cmro(client, db_session, test_region, test_pdv):
-    """Sans identifiant CMRO dans le fichier, le rapprochement au retour
-    reposerait sur l'ordre des lignes — c'est-a-dire sur rien."""
+async def test_l_export_wms_ne_porte_plus_le_code_cmro(client, db_session, test_region, test_pdv):
+    """#106 — Samuel a retenu le circuit ERT pour le retour des numeros, et la
+    macro Infolog refuse tout contenu inconnu : la colonne I porte l'ordre du
+    PDV dans sa tournee, plus le code CMRO (qui reste dans l'export ERT)."""
     tour = await _tour(db_session, test_region, test_pdv, jour="2026-10-12")
     resp = await client.get("/api/exports/wms-infolog", params={"date": tour.date})
     assert resp.status_code == 200, resp.text
     ws = _classeur(resp.content).active
-    codes = {ws.cell(l, 9).value for l in range(1, ws.max_row + 1)}
-    assert tour.code in codes
+    colonne_i = {ws.cell(l, 9).value for l in range(1, ws.max_row + 1)}
+    assert tour.code not in colonne_i
+    assert colonne_i <= set(range(1, 100))
     # Les colonnes que lit la macro ne doivent PAS avoir bouge
     assert ws.cell(1, 2).value is not None       # B = code PDV
     assert ws.cell(1, 7).value is not None       # G = index global
@@ -123,28 +125,6 @@ async def test_circuit_ert_le_trafic_saisit_le_numero(client, db_session, test_r
     await db_session.refresh(tour)
     # Excel rend le nombre saisi comme un flottant : il doit ressortir entier
     assert tour.wms_tour_code == "291186"
-
-
-@pytest.mark.asyncio
-async def test_circuit_wms_la_macro_colle_le_numero(client, db_session, test_region, test_pdv):
-    """Variante 1 du ticket : la macro Infolog ecrit le numero dans le fichier."""
-    tour = await _tour(db_session, test_region, test_pdv, jour="2026-10-15")
-    resp = await client.get("/api/exports/wms-infolog", params={"date": tour.date})
-    wb = _classeur(resp.content)
-    ws = wb.active
-    for ligne in range(1, ws.max_row + 1):
-        if ws.cell(ligne, 9).value == tour.code:
-            ws.cell(ligne, 10, "291187")      # la macro ecrit juste apres
-
-    resp = await client.post(
-        "/api/imports/tour-numbers",
-        files={"file": ("TMS_vers_wms.xlsx", _vers_fichier(wb),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["format"] == "WMS"
-    await db_session.refresh(tour)
-    assert tour.wms_tour_code == "291187"
 
 
 @pytest.mark.asyncio

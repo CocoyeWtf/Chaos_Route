@@ -950,7 +950,77 @@ async def import_data(
                 else:
                     existing_groups = []
 
+            # #116 — Volumes de ce périmètre déjà embarqués dans une tournée.
+            # « Remplacer » les supprimait aussi (la FK tour_id passe à NULL côté
+            # tournée) : la tournée restait affichée avec ses arrêts mais sans
+            # volumes, et la supprimer ne libérait plus rien — les EQC
+            # semblaient « disparaître ». On refuse donc de remplacer un
+            # périmètre planifié. / Volumes of this scope already in a tour:
+            # replacing them silently gutted those tours (#116).
+            planned_tours: list[str] = []
             if existing_groups:
+                if dispatch_date:
+                    scope = [Volume.dispatch_date == dispatch_date, Volume.base_origin_id.in_(list(base_ids_in_file))]
+                    if dispatch_time:
+                        scope.append(Volume.dispatch_time == dispatch_time)
+                else:
+                    scope = [Volume.date.in_(list(dates_in_file)), Volume.base_origin_id.in_(list(base_ids_in_file))]
+                planned_res = await db.execute(
+                    select(Tour.code).join(Volume, Volume.tour_id == Tour.id).where(*scope).distinct()
+                )
+                planned_tours = sorted(planned_res.scalars().all())
+
+            # #87 (option A retenue par Gaetan) — La journée porte déjà des
+            # volumes d'AUTRES bases que celle qu'on importe : on le dit avant
+            # d'écrire. Le 25/09, un import de Trazegnies était parti sur
+            # Villers ; nommer les bases déjà chargées rend l'erreur visible.
+            # / Warn when the day already holds volumes of other bases.
+            other_bases: list[dict] = []
+            if mode == "check":
+                if dispatch_date:
+                    day_scope = [Volume.dispatch_date == dispatch_date]
+                elif dates_in_file:
+                    day_scope = [Volume.date.in_(list(dates_in_file))]
+                else:
+                    day_scope = []
+                if day_scope:
+                    ob_res = await db.execute(
+                        select(BaseLogistics.code, BaseLogistics.name, func.count(Volume.id))
+                        .join(BaseLogistics, BaseLogistics.id == Volume.base_origin_id)
+                        .where(*day_scope, Volume.base_origin_id.notin_(list(base_ids_in_file)))
+                        .group_by(BaseLogistics.code, BaseLogistics.name)
+                        .order_by(BaseLogistics.code)
+                    )
+                    other_bases = [{"base": f"{c} — {n}", "count": k} for c, n, k in ob_res.all()]
+            if mode == "check" and other_bases and not existing_groups:
+                imp_res = await db.execute(
+                    select(BaseLogistics.code, BaseLogistics.name).where(BaseLogistics.id.in_(list(base_ids_in_file)))
+                )
+                importing = ", ".join(f"{c} — {n}" for c, n in imp_res.all())
+                return {
+                    "status": "base_warning",
+                    "importing_base": importing,
+                    "other_bases": other_bases,
+                    "new_row_count": len(rows),
+                    "message": (
+                        f"Vous importez sur {importing}, alors que ce jour porte déjà des volumes de : "
+                        + ", ".join(f"{b['base']} ({b['count']})" for b in other_bases)
+                        + ". Vérifiez la base d'origine avant de confirmer."
+                    ),
+                }
+
+            if existing_groups:
+                if mode == "replace" and planned_tours:
+                    shown = ", ".join(planned_tours[:15]) + (" …" if len(planned_tours) > 15 else "")
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Remplacement refusé : {len(planned_tours)} tournée(s) utilisent déjà des volumes "
+                            f"de cette date et de cette base ({shown}). Les remplacer viderait ces tournées. "
+                            f"Supprimez d'abord ces tournées (leurs volumes seront libérés), ou importez en mode "
+                            f"« Ajouter ». / Replace refused: volumes already planned in tours."
+                        ),
+                    )
                 if mode == "check":
                     base_result = await db.execute(
                         select(BaseLogistics.id, BaseLogistics.code, BaseLogistics.name)
@@ -973,7 +1043,14 @@ async def import_data(
                         "existing": existing_details,
                         "total_existing": total,
                         "new_row_count": len(rows),
-                        "message": f"{total} volumes existent déjà pour les mêmes dates/bases",
+                        "planned_tours": planned_tours,
+                        "other_bases": other_bases,
+                        "message": f"{total} volumes existent déjà pour les mêmes dates/bases"
+                        + (
+                            f" — dont certains déjà planifiés dans {len(planned_tours)} tournée(s) : "
+                            f"le remplacement sera refusé tant que ces tournées existent"
+                            if planned_tours else ""
+                        ),
                     }
                 elif mode == "replace":
                     if dispatch_date:

@@ -62,7 +62,11 @@ async def test_date_livraison_est_une_date_au_format_jjmmaa(client, db_session, 
     # Une date nue : pas de composante horaire résiduelle
     assert getattr(valeur, "hour", 0) == 0 and getattr(valeur, "minute", 0) == 0
     assert valeur.isoformat().startswith(LIVRAISON)
-    assert cellule.number_format == "DD-MM-YY"
+    # #106 : jj/mm/aaaa avec des « / » littéraux (la macro Infolog est stricte)
+    assert cellule.number_format == r"dd\/mm\/yyyy"
+    # H au format texte, I = ordre du PDV dans la tournée (plus le code CMRO)
+    assert ws.cell(ligne, 8).number_format == "@"
+    assert ws.cell(ligne, 9).value == 1
 
 
 @pytest.mark.asyncio

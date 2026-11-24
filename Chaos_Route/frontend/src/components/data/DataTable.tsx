@@ -52,6 +52,8 @@ interface DataTableProps<T extends { id: number }> {
   title?: string
   searchable?: boolean
   searchKeys?: (keyof T)[]
+  /* Texte supplémentaire couvert par la recherche globale (#117) */
+  searchText?: (row: T) => string
 }
 
 export function DataTable<T extends { id: number }>({
@@ -70,6 +72,7 @@ export function DataTable<T extends { id: number }>({
   title,
   searchable = true,
   searchKeys = [],
+  searchText,
 }: DataTableProps<T>) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
@@ -223,18 +226,19 @@ export function DataTable<T extends { id: number }>({
     }
 
     // Recherche globale / Global search
-    if (search && searchKeys.length > 0) {
+    if (search && (searchKeys.length > 0 || searchText)) {
       const q = search.toLowerCase()
       result = result.filter((row) =>
         searchKeys.some((key) => {
           const val = row[key]
           return val != null && String(val).toLowerCase().includes(q)
         })
+        || (searchText ? searchText(row).toLowerCase().includes(q) : false)
       )
     }
 
     return result
-  }, [data, search, searchKeys, colFilters, columns, filterTextOf])
+  }, [data, search, searchKeys, searchText, colFilters, columns, filterTextOf])
 
   /* Totaux de colonnes (#91) / Column totals */
   const columnsWithTotal = useMemo(

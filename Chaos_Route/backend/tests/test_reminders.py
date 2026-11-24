@@ -74,7 +74,7 @@ async def test_un_profil_sans_les_droits_n_est_pas_sollicite(client, db_session,
 
 @pytest.mark.asyncio
 async def test_l_archive_trimestrielle_est_reclamee(client, db_session, as_user):
-    as_user(await _user_with(db_session, [("tour-history", "read")]))
+    as_user(await _user_with(db_session, [("tour-history", "read"), ("reminders", "read")]))
 
     rappels = (await client.get("/api/reminders/")).json()
     cles = {r["key"] for r in rappels}
@@ -90,7 +90,7 @@ async def test_l_archive_trimestrielle_est_reclamee(client, db_session, as_user)
 
 @pytest.mark.asyncio
 async def test_confirmer_l_archive_fait_taire_le_rappel(client, db_session, as_user):
-    as_user(await _user_with(db_session, [("tour-history", "read")]))
+    as_user(await _user_with(db_session, [("tour-history", "read"), ("reminders", "read")]))
 
     resp = await client.post("/api/reminders/HISTORY_ARCHIVE/ack", json={})
     assert resp.status_code == 200, resp.text
@@ -104,10 +104,10 @@ async def test_confirmer_l_archive_fait_taire_le_rappel(client, db_session, as_u
 async def test_l_accuse_vaut_pour_toute_la_societe(client, db_session, as_user):
     """L'archive trimestrielle se fait une fois, pas une fois par personne :
     sinon chaque R-Cam verrait le rappel apres que son collegue l'a traitee."""
-    as_user(await _user_with(db_session, [("tour-history", "read")]))
+    as_user(await _user_with(db_session, [("tour-history", "read"), ("reminders", "read")]))
     await client.post("/api/reminders/HISTORY_ARCHIVE/ack", json={})
 
-    as_user(await _user_with(db_session, [("tour-history", "read")]))
+    as_user(await _user_with(db_session, [("tour-history", "read"), ("reminders", "read")]))
     rappels = (await client.get("/api/reminders/")).json()
     assert "HISTORY_ARCHIVE" not in {r["key"] for r in rappels}
 
@@ -128,7 +128,7 @@ async def test_l_accuse_est_borne_a_sa_periode(client, db_session, as_user):
 async def test_le_prix_carburant_est_reclame_quand_la_semaine_est_vide(
     client, db_session, as_user,
 ):
-    as_user(await _user_with(db_session, [("fuel-prices", "update")]))
+    as_user(await _user_with(db_session, [("fuel-prices", "update"), ("reminders", "read")]))
 
     rappels = (await client.get("/api/reminders/")).json()
     carburant = [r for r in rappels if r["key"] == "FUEL_PRICE"]
@@ -157,7 +157,7 @@ async def test_un_prix_encode_eteint_le_rappel_sans_clic(client, db_session, as_
     ))
     await db_session.commit()
 
-    as_user(await _user_with(db_session, [("fuel-prices", "update")]))
+    as_user(await _user_with(db_session, [("fuel-prices", "update"), ("reminders", "read")]))
     rappels = (await client.get("/api/reminders/")).json()
     assert "FUEL_PRICE" not in {r["key"] for r in rappels}
 
@@ -174,3 +174,13 @@ async def test_la_semaine_iso_est_calculee_correctement():
     assert dimanche == "2026-10-18"
     assert _periode_semaine(mercredi) == _periode_semaine(datetime(2026, 10, 18))
     assert _periode_semaine(mercredi) != _periode_semaine(datetime(2026, 10, 19))
+
+
+@pytest.mark.asyncio
+async def test_108_reserve_aux_destinataires_designes(client, db_session, as_user):
+    """#108 — Un Postier (tour-history:read) n'est plus sollicité : seul le
+    droit « reminders:read » (rôle R-Cam) désigne les destinataires."""
+    as_user(await _user_with(db_session, [("tour-history", "read"), ("fuel-prices", "update")]))
+    resp = await client.get("/api/reminders/")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []

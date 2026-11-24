@@ -120,6 +120,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   // Déplanifier ("Retirer") réservé au transport via permission dédiée /
   // Unscheduling ("Retirer") restricted to transport via dedicated permission
   const canUnschedule = useAuthStore((s) => s.hasPermission('tour-unschedule', 'update'))
+  const canDeleteTours = useAuthStore((s) => s.hasPermission('tour-planning', 'delete'))
 
   const regionParams = selectedRegionId ? { region_id: selectedRegionId } : undefined
   const { data: bases } = useApi<BaseLogistics>('/bases', regionParams)
@@ -396,10 +397,13 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     setScheduleInputs((prev) => {
       const next = { ...prev }
       for (const tour of unscheduled) {
+        // #110 : une date déjà portée par la tournée (changement de date en
+        // lot) prime sur la date calculée depuis la répartition. /
+        // A date already stored on the tour wins over the computed default.
         if (!next[tour.id]?.deliveryDate) {
           next[tour.id] = {
             ...(next[tour.id] ?? EMPTY_INPUT),
-            deliveryDate: computeDefaultDeliveryDate(tour),
+            deliveryDate: tour.delivery_date || computeDefaultDeliveryDate(tour),
           }
         }
       }
@@ -636,15 +640,28 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
     if (!bulkDate || selectedTourIds.size === 0) return
     setBulkSaving(true)
     const echecs: string[] = []
+    const appliedIds: number[] = []
     try {
       for (const id of selectedTourIds) {
         try {
           await api.put(`/tours/${id}`, { delivery_date: bulkDate })
+          appliedIds.push(id)
         } catch {
           const t = tours.find((x) => x.id === id)
           echecs.push(t?.code ?? `#${id}`)
         }
       }
+      // #110 : la carte de chaque tournée affiche (et renverra à la
+      // planification) la date de son formulaire. Sans cette mise à jour, elle
+      // gardait l'ancienne date : le changement semblait sans effet, puis était
+      // écrasé au moment de planifier. / Keep the per-card form in sync.
+      setScheduleInputs((prev) => {
+        const next = { ...prev }
+        for (const id of appliedIds) {
+          next[id] = { ...(next[id] ?? EMPTY_INPUT), deliveryDate: bulkDate }
+        }
+        return next
+      })
       await loadData()
       setSelectedTourIds(new Set())
       setBulkDate('')
@@ -655,6 +672,39 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
       setBulkSaving(false)
     }
   }, [bulkDate, selectedTourIds, tours, loadData])
+
+  /* Suppression en masse (#109). Même chemin que le bouton « Supprimer » d'une
+     tournée — les volumes sont libérés et rendus à la planification — appelé
+     en séquence (le serveur recalcule le terme fixe des tournées sœurs à
+     chaque suppression). Une tournée partie (top départ) est refusée par le
+     serveur et nommée. / Bulk delete, sequential, same path as single delete. */
+  const deleteSelectedTours = useCallback(async () => {
+    const ids = [...selectedTourIds]
+    if (ids.length === 0) return
+    const codes = ids.map((id) => tours.find((x) => x.id === id)?.code ?? `#${id}`)
+    if (!window.confirm(
+      `Supprimer ${ids.length} tournée(s) ?\n\n${codes.slice(0, 15).join(', ')}${codes.length > 15 ? ' …' : ''}\n\n`
+      + 'Leurs volumes seront libérés et rendus à la planification.',
+    )) return
+    setBulkSaving(true)
+    const echecs: string[] = []
+    try {
+      for (const id of ids) {
+        try {
+          await api.delete(`/tours/${id}`)
+        } catch (e: unknown) {
+          const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+          const code = tours.find((x) => x.id === id)?.code ?? `#${id}`
+          echecs.push(detail ? `${code} (${detail})` : code)
+        }
+      }
+      await loadData()
+      setSelectedTourIds(new Set())
+      if (echecs.length > 0) alert(`Non supprimées :\n${echecs.join('\n')}`)
+    } finally {
+      setBulkSaving(false)
+    }
+  }, [selectedTourIds, tours, loadData])
 
   /* Détecter les tours avec violation de fenêtre de livraison / Detect delivery window violations */
   const deliveryWindowViolations = useMemo(() => {
@@ -798,7 +848,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
   }
 
   /* Planifier un tour / Schedule a tour */
-  const handleSchedule = async (tourId: number, force = false) => {
+  const handleSchedule = async (tourId: number, force = false, allowOverlap = false): Promise<void> => {
     const input = scheduleInputs[tourId]
     if (!input?.time) return
     // Validation selon mode / Validate by mode
@@ -823,21 +873,39 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
         priority: input.priority ?? null,
         return_base_id: input.returnBaseId ?? null,
         final_pickup_supplier_id: input.finalPickupSupplierId ?? null,
-      }, { params: force ? { force: true } : undefined })
+      }, {
+        params: {
+          ...(force ? { force: true } : {}),
+          ...(allowOverlap ? { allow_overlap: true } : {}),
+        },
+      })
       await loadData()
       setEditingTourId(null)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string }; status?: number } }
       const detail = err?.response?.data?.detail
       const status = err?.response?.status
-      if (status === 422 && detail?.startsWith('OVER_10H:')) {
+      if (status === 409 && detail?.startsWith('Overlap')) {
+        // #124 : le chevauchement n'est plus bloquant. L'horaire calculé peut
+        // se tromper ; l'agent trafic confirme en connaissance de cause.
+        const confirmed = window.confirm(
+          `Chevauchement détecté : ${detail.replace(/^Overlap[^w]*with tour /, 'tournée ')}.
+
+`
+          + "Les heures calculées peuvent différer du réel. Attribuer quand même ?"
+        )
+        if (confirmed) {
+          setScheduling(null)
+          return handleSchedule(tourId, force, true)
+        }
+      } else if (status === 422 && detail?.startsWith('OVER_10H:')) {
         const totalTime = detail.replace('OVER_10H:', '')
         const confirmed = window.confirm(
           t('tourPlanning.over10hWarning', { total: totalTime })
         )
         if (confirmed) {
           setScheduling(null)
-          return handleSchedule(tourId, true)
+          return handleSchedule(tourId, true, allowOverlap)
         }
       } else if (status === 422 && detail?.startsWith('DOCK_TAILGATE:')) {
         const violations = detail.replace('DOCK_TAILGATE:', '')
@@ -856,7 +924,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
         )
         if (confirmed) {
           setScheduling(null)
-          return handleSchedule(tourId, true)
+          return handleSchedule(tourId, true, allowOverlap)
         }
       } else if (status === 422 && detail?.startsWith('CONTRACT_UNAVAILABLE:')) {
         const unavailDate = detail.replace('CONTRACT_UNAVAILABLE:', '')
@@ -1600,6 +1668,17 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
               >
                 {bulkSaving ? '…' : 'Appliquer'}
               </button>
+              {canDeleteTours && (
+                <button
+                  className="px-2 py-2 text-xs rounded-lg font-semibold border disabled:opacity-40"
+                  style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)', backgroundColor: 'rgba(239,68,68,0.08)' }}
+                  disabled={bulkSaving}
+                  onClick={deleteSelectedTours}
+                  title="Supprimer les tournées cochées et libérer leurs volumes (#109)"
+                >
+                  Supprimer
+                </button>
+              )}
               <button
                 className="px-2 py-2 text-xs rounded-lg"
                 style={{ color: 'var(--text-muted)' }}
@@ -2123,7 +2202,7 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                           type="checkbox"
                           className="accent-orange-500 shrink-0"
                           checked={selectedTourIds.has(tour.id)}
-                          title="Sélectionner pour un changement de date groupé"
+                          title="Sélectionner (changement de date groupé, suppression en masse)"
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => {
                             e.stopPropagation()
@@ -2508,10 +2587,13 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                           <button
                             className="px-2 py-1 rounded text-[11px] font-semibold transition-all disabled:opacity-40 shrink-0"
                             style={{
-                              backgroundColor: canSchedule && !overlap ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                              color: canSchedule && !overlap ? '#fff' : 'var(--text-muted)',
+                              // #124 : un chevauchement colore le bouton en orange
+                              // (à confirmer) au lieu de le bloquer.
+                              backgroundColor: canSchedule ? (overlap ? 'var(--color-warning)' : 'var(--color-primary)') : 'var(--bg-tertiary)',
+                              color: canSchedule ? '#fff' : 'var(--text-muted)',
                             }}
-                            disabled={!canSchedule || !!overlap || scheduling === tour.id}
+                            title={overlap ? `Chevauche ${overlap.code} — une confirmation sera demandée` : undefined}
+                            disabled={!canSchedule || scheduling === tour.id}
                             onClick={(e) => { e.stopPropagation(); handleSchedule(tour.id) }}
                           >
                             {scheduling === tour.id ? '...' : (editingTourId === tour.id ? 'Enregistrer' : 'Planifier')}

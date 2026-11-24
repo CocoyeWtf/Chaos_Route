@@ -75,6 +75,12 @@ RESOURCES = [
     # fermer aux profils PDV. / The resource was already enforced in code but
     # not listed here, so no role could hold it.
     "tickets",
+    # Bandeaux de rappel à la connexion (#108). Ils visaient tout porteur de la
+    # permission métier (tour-history:read, fuel-prices:update) : Postier,
+    # SPDV, Bêta Testeur les recevaient. Samuel les veut sur les seuls R-Cam :
+    # destinataires désignés par ce droit, cochable dans la matrice. /
+    # Login reminder banners: explicit audience, R-Cam only by default.
+    "reminders",
     "consolidation",  # Multi-tenance : lève le cloisonnement tenant (lecture multi-société)
 ]
 ACTIONS = ["read", "create", "update", "delete"]

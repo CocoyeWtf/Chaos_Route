@@ -73,14 +73,13 @@ async def export_wms_infolog(
     D = code transporteur · E = date de livraison · F = heure de départ ·
     G = index global (décroissant par tour) · H = heure de départ (texte).
 
-    Colonne I = code de la tournée CMRO (#104). Elle est AJOUTÉE EN FIN de ligne
-    pour ne rien déplacer de ce que lit la macro d'encodage, et elle n'existe
-    que pour le retour : quand Infolog a attribué ses numéros, il faut pouvoir
-    recoller chaque numéro à la bonne tournée. Sans elle le fichier ne contient
-    aucun identifiant CMRO, et le rapprochement reposerait sur l'ordre des
-    lignes — c'est-à-dire sur rien. /
-    Column I carries the CMRO tour code, appended so the macro's columns do not
-    move; it exists so the Infolog numbers can be matched back.
+    Colonne I = ordre du PDV dans sa tournée (#106), décroissant comme les
+    lignes. Elle portait le code CMRO (#104) pour recoller les numéros Infolog
+    au retour ; Samuel a retenu le circuit ERT rempli à la main pour ce retour
+    (l'export ERT porte, lui, la colonne « Code CMRO »), et la macro Infolog
+    refuse tout contenu inconnu. Format exigé par la macro : E = date
+    jj/mm/aaaa avec des « / », H = texte, aucun en-tête ni mise en page. /
+    Column I = PDV delivery order in its tour (#106); E dd/mm/yyyy; H text.
     """
     # ── Code transporteur (paramètre global configurable) ────────────────────
     carrier_param = await db.execute(
@@ -181,11 +180,15 @@ async def export_wms_infolog(
                 dep_text,                           # F
                 idx,                                # G
                 dep_text,                           # H
-                tour.code,                          # I — identifiant CMRO (#104)
+                delivery_rank,                      # I — ordre du PDV dans la tournée (#106)
             ])
-            # Format JJ-MM-AA sur la date de livraison (#34) / DD-MM-YY on the date
+            # E : jj/mm/aaaa avec des « / » LITTÉRAUX (#106, la macro est
+            # stricte) — échappés pour ne pas suivre le séparateur régional. /
+            # Literal slashes regardless of the regional date separator.
             if isinstance(delivery_date_val, date_type):
-                ws.cell(ws.max_row, 5).number_format = "DD-MM-YY"
+                ws.cell(ws.max_row, 5).number_format = r"dd\/mm\/yyyy"
+            # H : cellule au format texte (#106) / Text-formatted cell
+            ws.cell(ws.max_row, 8).number_format = "@"
 
     content = io.BytesIO()
     wb.save(content)
@@ -462,10 +465,16 @@ async def export_postier_planning(
         base_disp = _base_disp(tour.base)
         gel = "O" if (tour.temperature_type and "GEL" in tour.temperature_type) else "N"
         trac = tour.tractor.code if tour.tractor else ""
-        semi = (
-            tour.vehicle.code if tour.vehicle
-            else (tour.contract.vehicle_code if tour.contract and tour.contract.vehicle_code else (tour.trailer_number or ""))
-        )
+        # #114 — Le contrat transporteur n'est PAS une semi : c'est le moyen
+        # presté, donc le « chauffeur » au sens de la feuille ERT. Son
+        # `vehicle_code` porte d'ailleurs le code long Infolog (08000123) dans
+        # 2 contrats sur 3 — illisible ici et réservé à l'export WMS. On sort
+        # donc le code COURT du contrat (« Baeskens 02 ») dans « Chauffeurs »
+        # quand aucun nom n'a été saisi, et « Semi » ne reçoit plus qu'une vraie
+        # semi (véhicule du parc ou n° de semi saisi par le postier). /
+        # The contract is the driver line, not the trailer.
+        semi = tour.vehicle.code if tour.vehicle else (tour.trailer_number or "")
+        chauffeur = tour.driver_name or (tour.contract.code if tour.contract else "")
         # Ordre = priorité d'ordonnancement saisie par le planificateur (aide
         # opérationnelle). Vide si non saisie : ne PAS y mettre un rang, qui se
         # lirait comme une priorité (#78). / Order = planner-entered priority;
@@ -477,7 +486,7 @@ async def export_postier_planning(
         ws.cell(r, 3, tour.loader_name or "")
         ws.cell(r, 4, tour.loader_code or "")
         # 5 = Type Tour (pas d'équivalent) — laissé vide
-        ws.cell(r, 6, tour.driver_name or "")
+        ws.cell(r, 6, chauffeur)
         ws.cell(r, 7, trac)
         ws.cell(r, 8, semi)
         ws.cell(r, 9, gel)

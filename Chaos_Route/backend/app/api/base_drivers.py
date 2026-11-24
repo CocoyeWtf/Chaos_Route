@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.base_driver import BaseDriver, DriverStatus
 from app.models.user import User
 from app.schemas.base_driver import BaseDriverCreate, BaseDriverRead, BaseDriverUpdate
-from app.api.deps import require_permission
+from app.api.deps import require_permission, require_any_permission
 
 router = APIRouter()
 
@@ -19,7 +19,9 @@ async def list_base_drivers(
     base_id: int | None = None,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("base-drivers", "read")),
+    # Le postier choisit un chauffeur base en changeant de moyen (#115). /
+    # The postier picks a base driver when reassigning a tour.
+    user: User = Depends(require_any_permission(("base-drivers", "read"), ("operations", "read"))),
 ):
     """Lister les chauffeurs base / List base drivers."""
     query = select(BaseDriver).order_by(BaseDriver.last_name, BaseDriver.first_name)

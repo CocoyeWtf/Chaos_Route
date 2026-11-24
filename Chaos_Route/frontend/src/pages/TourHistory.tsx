@@ -6,7 +6,7 @@ import { useApi } from '../hooks/useApi'
 import { useAppStore } from '../stores/useAppStore'
 import { useAuthStore } from '../stores/useAuthStore'
 import api, { remove, downloadTourHistory } from '../services/api'
-import type { Tour, BaseLogistics, Contract } from '../types'
+import type { Tour, BaseLogistics, Contract, PDV } from '../types'
 import { TOUR_TYPE_LABELS } from '../types'
 import type { Column } from '../components/data/DataTable'
 import { DataTable } from '../components/data/DataTable'
@@ -33,6 +33,14 @@ export default function TourHistory() {
   const { data: tours, loading, refetch } = useApi<Tour>('/tours', params)
   const { data: bases } = useApi<BaseLogistics>('/bases')
   const { data: contracts } = useApi<Contract>('/contracts')
+  /* Recherche par PDV (#117) : retrouver les tournées qui ont livré un magasin. */
+  const { data: pdvs } = useApi<PDV>('/pdvs')
+  const pdvMap = new Map(pdvs.map((p) => [p.id, p]))
+  const pdvLabels = (row: Tour) =>
+    [...(row.stops ?? [])]
+      .sort((a, b) => a.sequence_order - b.sequence_order)
+      .map((st) => pdvMap.get(st.pdv_id))
+      .filter((p): p is PDV => !!p)
 
   const baseMap = new Map(bases.map((b) => [b.id, b]))
   const contractMap = new Map(contracts.map((c) => [c.id, c]))
@@ -162,6 +170,17 @@ export default function TourHistory() {
       label: t('tourPlanning.stops'),
       width: '70px',
       render: (row) => row.stops?.length ?? 0,
+    },
+    {
+      key: 'stops' as keyof Tour,
+      label: 'PDV',
+      width: '200px', filterable: true,
+      render: (row) => {
+        const codes = pdvLabels(row).map((p) => p.code)
+        return <span title={codes.join(', ')}>{codes.slice(0, 4).join(', ')}{codes.length > 4 ? ` +${codes.length - 4}` : ''}</span>
+      },
+      // Filtre et recherche sur le code, le nom et la ville du PDV (#117)
+      filterValue: (row) => pdvLabels(row).map((p) => `${p.code} ${p.name} ${p.city ?? ''}`).join(' | '),
     },
     { key: 'total_eqp', label: 'EQC', width: '70px' },
     {
@@ -327,6 +346,7 @@ export default function TourHistory() {
           data={tours}
           columns={columns}
           searchKeys={['code', 'date']}
+          searchText={(row) => pdvLabels(row).map((p) => `${p.code} ${p.name} ${p.city ?? ''}`).join(' ')}
           onRowClick={(row) => setCostTourId(row.id)}
         />
       )}

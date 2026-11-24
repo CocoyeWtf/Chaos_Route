@@ -309,3 +309,25 @@ async def test_arriver_sur_une_tournee_ordinaire_est_refuse(client, db_session, 
 
     resp = await client.post(f"/api/tours/{t.id}/navette/arrive", json={})
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_123_la_navette_compte_son_trajet_et_son_temps_sur_place(client, db_session, decor):
+    """#123 — Départ 09:00, retour 09:00 : la navette ne comptait rien, faute de
+    PDV. Elle compte désormais le trajet base -> base et le temps sur place."""
+    from app.models.distance_matrix import DistanceMatrix
+    from app.models.tour import Tour
+
+    db_session.add(DistanceMatrix(origin_type="BASE", origin_id=decor["traz"].id,
+                                  destination_type="BASE", destination_id=decor["villers"].id,
+                                  distance_km=80, duration_minutes=60))
+    await db_session.commit()
+
+    resp = await _creer(client, decor, departure_time="09:00")
+    assert resp.status_code == 201, resp.text
+    tour = await db_session.get(Tour, resp.json()["id"])
+    await db_session.refresh(tour)
+    assert tour.departure_time == "09:00"
+    assert tour.return_time is not None and tour.return_time > "10:00"   # 60 min + temps sur place
+    assert (tour.total_duration_minutes or 0) > 60
+    assert float(tour.total_km or 0) == 80

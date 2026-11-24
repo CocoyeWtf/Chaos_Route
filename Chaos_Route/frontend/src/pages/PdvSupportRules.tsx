@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import api from '../services/api'
+import { useAuthStore } from '../stores/useAuthStore'
 
 interface PdvRow { id: number; code: string; name: string; hidden_count: number }
 interface SupportRow {
@@ -54,17 +55,22 @@ export default function PdvSupportRules() {
   /* Etat enregistre, pour savoir s'il reste des modifications a sauver /
      Saved state, to know whether there are pending changes */
   const [savedHidden, setSavedHidden] = useState<Set<number>>(new Set())
+  /* #105 : un compte magasin règle ses propres supports, sans le droit
+     global. Il ne voit que son PDV (filtré côté serveur), déjà sélectionné. */
+  const ownPdvId = useAuthStore((s) => (s.user?.is_superadmin ? null : s.user?.pdv_id ?? null))
+  const canManageAll = useAuthStore((s) => s.hasPermission('support-types', 'update'))
 
   const loadPdvs = useCallback(async () => {
     try {
       const { data } = await api.get<PdvRow[]>('/pdv-support-rules/pdvs')
       setPdvs(data)
+      if (ownPdvId != null && data.some((p) => p.id === ownPdvId)) setPdvId(ownPdvId)
     } catch {
       setError('Impossible de charger la liste des PDV.')
     } finally {
       setLoadingPdvs(false)
     }
-  }, [])
+  }, [ownPdvId])
 
   useEffect(() => { loadPdvs() }, [loadPdvs])
 
@@ -313,6 +319,7 @@ export default function PdvSupportRules() {
                   style={{ border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
                   Tout decocher
                 </button>
+                {canManageAll && (<>
                 <button onClick={handleReset} disabled={saving}
                   className="px-2 py-1 rounded-lg text-xs"
                   style={{ border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
@@ -328,6 +335,7 @@ export default function PdvSupportRules() {
                   title={dirty ? 'Enregistrez d\'abord ce PDV' : 'Copier vers d\'autres PDV'}>
                   Copier vers...
                 </button>
+                </>)}
                 <button onClick={handleSave} disabled={saving || !dirty}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold"
                   style={{

@@ -236,6 +236,15 @@ async def calculate_tour_times(
             return_minutes = return_dist.duration_minutes if return_dist else 0
         return_dt = current_time + timedelta(minutes=return_minutes)
         return_time = _format_time(return_dt)
+    elif ret_base_id != base_id:
+        # Navette (#123) : aucun PDV, mais un vrai trajet de base à base et un
+        # temps sur place (déchargement à l'arrivée). Elle durait 0 minute :
+        # départ 09:00, retour 09:00, et le chauffeur paraissait libre pour
+        # une autre tournée. / Navette: base-to-base leg plus time on site.
+        leg = await _get_distance(db, "BASE", base_id, "BASE", ret_base_id)
+        on_site = final_pickup_duration_minutes or default_dock
+        return_dt = current_time + timedelta(minutes=(leg.duration_minutes if leg else 0) + on_site)
+        return_time = _format_time(return_dt)
     else:
         return_time = departure_time
 
@@ -278,6 +287,9 @@ def _build_segments(
             segments.append(("SUPPLIER", final_pickup_supplier_id, "BASE", ret_base))
         else:
             segments.append(("PDV", sorted_stops[-1]["pdv_id"], "BASE", ret_base))
+    elif return_base_id and return_base_id != base_id:
+        # Navette (#123) : le seul trajet est base -> base d'arrivée.
+        segments.append(("BASE", base_id, "BASE", return_base_id))
     return segments
 
 
@@ -605,7 +617,8 @@ async def available_contracts_for_tours(
     tour_id: int | None = Query(default=None),
     mode: str | None = Query(default=None, description="preste | mixte (filtre selon ce que le transporteur fournit)"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("tour-planning", "read")),
+    # Lu aussi par l'écran postier pour changer de moyen (#115). / Also postier.
+    user: User = Depends(require_any_permission(("tour-planning", "read"), ("operations", "read"))),
 ):
     """Contrats disponibles à une date/heure / Available contracts at a date/time."""
     from app.models.contract_schedule import ContractSchedule
@@ -928,6 +941,10 @@ async def cmro_extraction_export(
 # Tour vehicle_type → expected fleet_vehicle_type(s) for own vehicles
 VEHICLE_TYPE_TO_FLEET: dict[str, list[str]] = {
     "SEMI": ["SEMI_REMORQUE", "SEMI"],
+    # #122 — La semi courte (42 EQC, #65) manquait : ni remorque ni tracteur
+    # n'étaient proposés en mode « Base ». Une semi courte reste une
+    # semi-remorque au parc (pas de type flotte dédié). / Short semi = semi.
+    "SEMI_COURTE": ["SEMI_REMORQUE", "SEMI"],
     "PORTEUR": ["PORTEUR", "PORTEUR_SURBAISSE"],
     "PORTEUR_SURBAISSE": ["PORTEUR_SURBAISSE"],
     "PORTEUR_REMORQUE": ["PORTEUR", "PORTEUR_SURBAISSE", "PORTEUR_REMORQUE", "REMORQUE"],
@@ -944,7 +961,8 @@ async def available_vehicles_for_tours(
     temperature_type: str | None = Query(default=None),
     tour_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("tour-planning", "read")),
+    # Lu aussi par l'écran postier pour changer de moyen (#115). / Also postier.
+    user: User = Depends(require_any_permission(("tour-planning", "read"), ("operations", "read"))),
 ):
     """Véhicules propres disponibles pour un tour / Own fleet vehicles available for a tour."""
     from app.models.contract import TemperatureType as TempType
@@ -971,7 +989,7 @@ async def available_vehicles_for_tours(
     # Filtrer par type compatible avec le tour / Filter by types compatible with tour
     expected_types = VEHICLE_TYPE_TO_FLEET.get(vehicle_type, [])
     # Ajouter TRACTEUR à la liste pour les ensembles SEMI / Add TRACTEUR for SEMI ensembles
-    if vehicle_type == "SEMI":
+    if vehicle_type in ("SEMI", "SEMI_COURTE"):
         expected_types = expected_types + ["TRACTEUR"]
 
     available = [
@@ -1879,6 +1897,43 @@ async def create_navette(
         "volume_ids": [v.id for v in volumes],
     })
     await db.flush()
+
+    # #123 — Horaire, km et coût dès la création. La navette naissait avec une
+    # heure de départ mais sans retour ni durée (0 minute à l'écran), parce
+    # qu'elle ne repassait jamais par la planification. On la planifie donc
+    # ici quand l'heure et le transporteur sont connus. Un refus de la
+    # planification (contrat indisponible…) n'empêche pas la création : on
+    # retombe sur le seul calcul d'horaire et on le signale. /
+    # Schedule the navette at creation when time and carrier are known.
+    if data.departure_time:
+        planifiee = False
+        if data.contract_id:
+            try:
+                await schedule_tour(
+                    tour.id,
+                    TourSchedule(
+                        contract_id=data.contract_id, departure_time=data.departure_time,
+                        delivery_date=data.date, return_base_id=data.destination_base_id,
+                    ),
+                    force=True, allow_overlap=True, db=db, user=user,
+                )
+                planifiee = True
+            except HTTPException as exc:
+                avertissements.append(f"Coût non calculé : {exc.detail}")
+        if not planifiee:
+            _, ret, duree = await calculate_tour_times(
+                data.departure_time, [], data.base_id, db, return_base_id=data.destination_base_id,
+            )
+            tour.return_time = ret
+            tour.total_duration_minutes = duree
+            leg = await _get_distance(db, "BASE", data.base_id, "BASE", data.destination_base_id)
+            tour.total_km = round(float(leg.distance_km), 2) if leg else 0
+        await db.flush()
+        if not await _get_distance(db, "BASE", data.base_id, "BASE", data.destination_base_id):
+            avertissements.append(
+                f"Distance {depart.code} → {arrivee.code} absente du distancier : "
+                "seul le temps sur place est compté."
+            )
 
     return {
         "id": tour.id,
@@ -2792,6 +2847,14 @@ async def schedule_tour(
     tour_id: int,
     data: TourSchedule,
     force: bool = Query(default=False),
+    # #124 — Un chevauchement d'horaires n'est plus bloquant : l'horaire
+    # calculé peut se tromper (Gaetan : « le programme peut se tromper sur les
+    # heures prestées »). Le serveur le signale toujours (409 « Overlap… ») et
+    # l'agent trafic confirme en connaissance de cause. Paramètre DISTINCT de
+    # `force` : confirmer un chevauchement ne doit pas taire en douce les
+    # fenêtres de livraison ni la limite des 10 h. / Overlap becomes a
+    # confirmable warning, separate from `force`.
+    allow_overlap: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("tour-planning", "update")),
 ):
@@ -2900,7 +2963,7 @@ async def schedule_tour(
         )
         other_contract_tours = list(other_contract_tours_result.scalars().all())
         for other in other_contract_tours:
-            if _intervals_overlap(
+            if not allow_overlap and _intervals_overlap(
                 sched_day, data.departure_time, return_time,
                 other.delivery_date or other.date, other.departure_time, other.return_time,
             ):
@@ -2932,7 +2995,7 @@ async def schedule_tour(
         )
         overlap_result = await db.execute(overlap_q)
         for other in overlap_result.scalars().all():
-            if _intervals_overlap(
+            if not allow_overlap and _intervals_overlap(
                 sched_day, data.departure_time, return_time,
                 other.delivery_date or other.date, other.departure_time, other.return_time,
             ):
@@ -2950,7 +3013,7 @@ async def schedule_tour(
         )
         tractor_overlap_result = await db.execute(tractor_overlap_q)
         for other in tractor_overlap_result.scalars().all():
-            if _intervals_overlap(
+            if not allow_overlap and _intervals_overlap(
                 sched_day, data.departure_time, return_time,
                 other.delivery_date or other.date, other.departure_time, other.return_time,
             ):
@@ -3028,6 +3091,10 @@ async def schedule_tour(
             db, last_pdv_id, tour.base_id, tour.return_base_id,
             tour.final_pickup_supplier_id,
         )
+    elif tour.return_base_id and tour.return_base_id != tour.base_id:
+        # Navette (#123) : kilomètres du trajet base -> base d'arrivée.
+        leg = await _get_distance(db, "BASE", tour.base_id, "BASE", tour.return_base_id)
+        total_km += float(leg.distance_km) if leg else 0.0
     total_km = round(total_km, 2)
 
     tour.contract_id = data.contract_id
@@ -3370,6 +3437,75 @@ async def validate_batch(
 # =========================================================================
 # Endpoints opérationnels / Operational endpoints
 # =========================================================================
+
+class TourReassign(BaseModel):
+    """Changement de moyen par le postier (#115). / Postier reassignment."""
+    contract_id: int | None = None
+    tractor_id: int | None = None
+    driver_name: str | None = None
+    driver_code_infolog: str | None = None
+
+
+@router.put("/{tour_id}/reassign", response_model=TourRead)
+async def reassign_tour(
+    tour_id: int,
+    data: TourReassign,
+    allow_overlap: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_permission(("tour-planning", "update"), ("operations", "update"))),
+):
+    """Changer le chauffeur / le moyen d'une tournée depuis l'écran postier (#115).
+
+    Avant : impossible sans supprimer la tournée, ce qui menait au #116. On
+    rejoue ici la planification COMPLÈTE (coût, horaires, chevauchement,
+    terme fixe des tournées sœurs) en gardant tout ce qui ne change pas :
+    heure de départ, date de livraison, priorité, base de retour, enlèvement.
+    `force=True` : les fenêtres de livraison ont été validées à
+    l'ordonnancement et l'heure ne bouge pas. Le chevauchement, lui, reste
+    signalé (#124) et se confirme par `allow_overlap`. Refusé après le top
+    départ. / Replays the full scheduling with only the assignment changed.
+    """
+    tour = await db.get(Tour, tour_id)
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    if tour.departure_signal_time:
+        raise HTTPException(status_code=409, detail="Tournée partie (top départ validé) : moyen non modifiable.")
+    if not tour.departure_time:
+        raise HTTPException(status_code=409, detail="Tournée non ordonnancée : choisissez le moyen depuis l'ordonnancement.")
+    if not data.contract_id and not data.tractor_id:
+        raise HTTPException(status_code=422, detail="Choisissez un contrat ou un tracteur.")
+    sched = TourSchedule(
+        contract_id=data.contract_id,
+        # La remorque propre ne suit que si l'on reste en interne. / Keep own trailer only.
+        vehicle_id=tour.vehicle_id if data.tractor_id and not data.contract_id else None,
+        tractor_id=data.tractor_id,
+        departure_time=tour.departure_time,
+        delivery_date=tour.delivery_date,
+        driver_name=data.driver_name,
+        driver_code_infolog=data.driver_code_infolog,
+        priority=float(tour.priority) if tour.priority is not None else None,
+        return_base_id=tour.return_base_id,
+        final_pickup_supplier_id=tour.final_pickup_supplier_id,
+        final_pickup_duration_minutes=tour.final_pickup_duration_minutes,
+    )
+    before = {"contract_id": tour.contract_id, "tractor_id": tour.tractor_id, "driver_name": tour.driver_name}
+    old_contract_id, tour_date = tour.contract_id, tour.date
+    result = await schedule_tour(tour_id, sched, force=True, allow_overlap=allow_overlap, db=db, user=user)
+    # Un nom saisi pour l'ancien moyen ne doit pas survivre au changement
+    # (`schedule_tour` ne l'efface jamais). / Don't keep the previous driver name.
+    if not data.driver_name and result.driver_name:
+        result.driver_name = None
+    # L'ancien contrat perd une tournée : son terme fixe se répartit sur
+    # moins de tournées. / The former contract's fixed term is redistributed.
+    if old_contract_id and old_contract_id != data.contract_id:
+        await _recalculate_sibling_tours(db, old_contract_id, tour_date)
+    await db.flush()
+    await _log_audit(db, "tour", tour_id, "REASSIGN", user, {
+        "before": before,
+        "after": {"contract_id": data.contract_id, "tractor_id": data.tractor_id, "driver_name": data.driver_name},
+    })
+    return result
+
 
 @router.put("/{tour_id}/operations", response_model=TourRead)
 async def update_tour_operations(

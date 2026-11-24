@@ -51,20 +51,23 @@ interface VolumePanelProps {
   baseFilters: Set<number>
   onBaseFiltersChange: (filters: Set<number>) => void
   availableBases: { id: number; code: string; name: string }[]
+  /* Groupe de livraison contrôlé par le parent (#118) : la carte doit suivre /
+     Delivery wave controlled by parent so the map follows */
+  groupFilter: '' | 'A' | 'B'
+  onGroupFilterChange: (g: '' | 'A' | 'B') => void
 }
 
 export function VolumePanel({
   volumes, pdvs, consumedVolumeIds, onAddVolume, onSplitVolume, vehicleCapacity, currentEqp,
   lastStopPdvId, baseId, distanceIndex, pickupSummaries, tempFilters, onTempFiltersChange,
-  baseFilters, onBaseFiltersChange, availableBases,
+  baseFilters, onBaseFiltersChange, availableBases, groupFilter, onGroupFilterChange,
 }: VolumePanelProps) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
   /* Groupe de livraison (#69) : une injection unique de volumes, livrée en deux
-     vagues. Le filtre est local au panneau — il ne change pas ce qui est
-     planifié, seulement ce qu'on regarde. /
-     Delivery wave filter: local to the panel, it only changes what is shown. */
-  const [groupFilter, setGroupFilter] = useState<'' | 'A' | 'B'>('')
+     vagues. Il ne change pas ce qui est planifié, seulement ce qu'on regarde —
+     liste ET carte (#118). / Delivery wave filter: list and map. */
+  const setGroupFilter = onGroupFilterChange
 
   const pdvMap = useMemo(() => new Map(pdvs.map((p) => [p.id, p])), [pdvs])
   const pickupMap = useMemo(() => {

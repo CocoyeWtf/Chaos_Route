@@ -110,6 +110,8 @@ const RESOURCE_GROUPS: ResourceGroup[] = [
     key: 'support', label: 'Support', icon: '🎫',
     resources: [
       { resource: 'tickets', label: 'Board de tickets' },
+      /* #108 : qui reçoit les bandeaux de rappel (prix carburant, archive). */
+      { resource: 'reminders', label: 'Bandeaux de rappel' },
     ],
   },
   {

@@ -296,3 +296,41 @@ async def test_le_formulaire_de_reprise_marque_les_supports_masques(
     as_pdv_user(await _pdv_user(db_session, other_pdv.id))
     voisin = (await client.get("/api/pickup-requests/form-data/")).json()
     assert {st["id"]: st for st in voisin["support_types"]}[casier.id]["hidden"] is False
+
+
+@pytest.mark.asyncio
+async def test_105_un_magasin_regle_ses_propres_supports(client, db_session, test_region):
+    """Samuel (16/10) : chaque PDV modifie les supports de SON PDV uniquement,
+    sans le droit global `support-types:update`."""
+    import uuid as _uuid
+    from app.api.deps import get_current_user
+    from app.main import app
+    from app.models.pdv import PDV, PDVType
+    from app.models.user import Permission, Role, User
+    from sqlalchemy.orm import selectinload
+
+    sfx = _uuid.uuid4().hex[:6]
+    mine = PDV(code=f"M{sfx}", name="Mon PDV", type=PDVType.HYPER, region_id=test_region.id)
+    other = PDV(code=f"O{sfx}", name="Autre PDV", type=PDVType.HYPER, region_id=test_region.id)
+    db_session.add_all([mine, other])
+    await db_session.commit()
+    role = Role(name=f"pdv_{sfx}")
+    role.permissions = [Permission(resource="support-types", action="read")]
+    u = User(username=f"pdv_{sfx}", email=f"{sfx}@pdv.test", hashed_password="x",
+             is_active=True, is_superadmin=False, pdv_id=mine.id)
+    u.roles = [role]
+    db_session.add_all([role, u])
+    await db_session.commit()
+    u = (await db_session.execute(select(User).where(User.id == u.id)
+         .options(selectinload(User.roles).selectinload(Role.permissions)))).scalar_one()
+    mine_id, other_id = mine.id, other.id
+
+    app.dependency_overrides[get_current_user] = lambda: u
+    try:
+        assert (await client.put(f"/api/pdv-support-rules/{mine_id}", json={"items": []})).status_code == 200
+        assert (await client.put(f"/api/pdv-support-rules/{other_id}", json={"items": []})).status_code == 403
+        assert (await client.get(f"/api/pdv-support-rules/{other_id}")).status_code == 403
+        listed = (await client.get("/api/pdv-support-rules/pdvs")).json()
+        assert [p["id"] for p in listed] == [mine_id]
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

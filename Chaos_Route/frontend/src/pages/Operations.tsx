@@ -72,6 +72,7 @@ export default function Operations() {
   const { isFullscreen, toggleFullscreen } = useAppStore()
   const canModifyStops = useAuthStore((s) => s.hasPermission('tour-stop-modify', 'update'))
   const canDeleteTour = useAuthStore((s) => s.hasPermission('tour-planning', 'delete'))
+  const canReassign = useAuthStore((s) => s.hasPermission('operations', 'update') || s.hasPermission('tour-planning', 'update'))
   const today = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(today)
   const [baseId, setBaseId] = useState<number | ''>('')
@@ -923,6 +924,7 @@ export default function Operations() {
                           onPatchStopsEqc={(eqcByPdv) => patchTourStopsEqc(tour.id, eqcByPdv)}
                           canModifyStops={canModifyStops}
                           canDeleteTour={canDeleteTour}
+                          canReassign={canReassign}
                           onRemoveStop={handleRemoveStop}
                           onAddStop={handleAddStop}
                           onUpdateStopEqc={handleUpdateStopEqc}
@@ -1168,6 +1170,115 @@ function AddStopInline({ pdvs, tourStopPdvIds, availableEqcByPdv, onAdd }: {
   )
 }
 
+/* Changer de moyen depuis le postier (#115). Avant, seul l'ordonnancement le
+   permettait : le postier supprimait la tournée pour la refaire, ce qui
+   menait au #116. Le serveur rejoue la planification complète (coût,
+   horaires, chevauchement) sans toucher à l'heure de départ. /
+   Reassign the tour's means from the postier screen. */
+function ReassignInline({ tour, onDone }: { tour: Tour; onDone: () => Promise<void> }) {
+  const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<'preste' | 'propre'>(tour.contract_id ? 'preste' : 'propre')
+  const [contracts, setContracts] = useState<Contract[]>([])
+  const [tractors, setTractors] = useState<{ id: number; label: string }[]>([])
+  const [drivers, setDrivers] = useState<{ id: number; last_name: string; first_name: string; code_infolog?: string | null }[]>([])
+  const [contractId, setContractId] = useState<number | ''>('')
+  const [tractorId, setTractorId] = useState<number | ''>('')
+  const [driverName, setDriverName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    const params = {
+      date: tour.delivery_date || tour.date, base_id: tour.base_id,
+      vehicle_type: tour.vehicle_type || undefined,
+      temperature_type: tour.temperature_type || undefined, tour_id: tour.id,
+    }
+    api.get<Contract[]>('/tours/available-contracts', { params }).then((r) => setContracts(r.data)).catch(() => setContracts([]))
+    if (tour.vehicle_type) {
+      api.get<{ id: number; label: string; is_tractor: boolean }[]>('/tours/available-vehicles', { params })
+        .then((r) => setTractors(r.data.filter((v) => v.is_tractor))).catch(() => setTractors([]))
+    }
+    api.get('/base-drivers/', { params: { base_id: tour.base_id } }).then((r) => setDrivers(r.data)).catch(() => setDrivers([]))
+  }, [open, tour])
+
+  const submit = async (allowOverlap = false): Promise<void> => {
+    const driver = drivers.find((d) => `${d.last_name} ${d.first_name}` === driverName)
+    const body = mode === 'preste'
+      ? { contract_id: contractId || null, driver_name: driverName || null }
+      : { tractor_id: tractorId || null, driver_name: driverName || null, driver_code_infolog: driver?.code_infolog ?? null }
+    setBusy(true)
+    try {
+      await api.put(`/tours/${tour.id}/reassign`, body, { params: allowOverlap ? { allow_overlap: true } : undefined })
+      setOpen(false)
+      await onDone()
+    } catch (e: unknown) {
+      const err = e as { response?: { status?: number; data?: { detail?: string } } }
+      const detail = err.response?.data?.detail
+      if (err.response?.status === 409 && detail?.startsWith('Overlap')) {
+        if (window.confirm(`Chevauchement détecté (${detail}).\nLes heures calculées peuvent différer du réel. Confirmer ?`)) {
+          setBusy(false)
+          return submit(true)
+        }
+      } else {
+        alert(detail ?? 'Changement impossible')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sel = 'px-1.5 py-1 rounded border text-xs'
+  const selStyle = { backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }
+  if (!open) {
+    return (
+      <button
+        className="text-[10px] px-2 py-1 rounded border font-semibold transition-all hover:opacity-80 mb-2"
+        style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+        title="Changer le chauffeur ou le moyen sans supprimer la tournée"
+        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+      >
+        Changer de chauffeur
+      </button>
+    )
+  }
+  const ready = mode === 'preste' ? !!contractId : !!tractorId
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mb-2" onClick={(e) => e.stopPropagation()}>
+      <select value={mode} onChange={(e) => setMode(e.target.value as 'preste' | 'propre')} className={sel} style={selStyle}>
+        <option value="preste">Presté (contrat)</option>
+        <option value="propre">Chauffeur base</option>
+      </select>
+      {mode === 'preste' ? (
+        <select value={contractId} onChange={(e) => setContractId(e.target.value ? Number(e.target.value) : '')} className={sel} style={selStyle}>
+          <option value="">Contrat…</option>
+          {[...contracts].sort((a, b) => a.code.localeCompare(b.code, 'fr', { numeric: true })).map((c) => (
+            <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
+          ))}
+        </select>
+      ) : (
+        <>
+          <select value={tractorId} onChange={(e) => setTractorId(e.target.value ? Number(e.target.value) : '')} className={sel} style={selStyle}>
+            <option value="">Tracteur…</option>
+            {tractors.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+          </select>
+          <select value={driverName} onChange={(e) => setDriverName(e.target.value)} className={sel} style={selStyle}>
+            <option value="">Chauffeur…</option>
+            {[...drivers].sort((a, b) => a.last_name.localeCompare(b.last_name, 'fr')).map((d) => (
+              <option key={d.id} value={`${d.last_name} ${d.first_name}`}>{d.last_name} {d.first_name}</option>
+            ))}
+          </select>
+        </>
+      )}
+      <button disabled={!ready || busy} onClick={() => submit()}
+        className="text-[10px] px-2 py-1 rounded font-semibold text-white disabled:opacity-40"
+        style={{ backgroundColor: 'var(--color-primary)' }}>
+        {busy ? '…' : 'Valider'}
+      </button>
+      <button onClick={() => setOpen(false)} className="text-[10px] px-2 py-1 rounded" style={{ color: 'var(--text-muted)' }}>Annuler</button>
+    </div>
+  )
+}
+
 interface TourRowProps {
   tour: TourWithDelay
   contract: Contract | null
@@ -1196,6 +1307,7 @@ interface TourRowProps {
   onPatchStopsEqc: (eqcByPdv: Record<string, number>) => void
   canModifyStops: boolean
   canDeleteTour: boolean
+  canReassign: boolean
   onRemoveStop: (tourId: number, stopId: number, pdvCode: string, temps?: TemperatureClass[]) => void
   onAddStop: (tourId: number, pdvId: number, eqpCount: number) => void
   onUpdateStopEqc: (tourId: number, stopId: number, eqpCount: number) => void
@@ -1208,8 +1320,8 @@ interface TourRowProps {
 function TourRow({
   tour, contract, form, isExpanded, color, pdvMap, volumes, saving, eqc, fleetVehicles,
   visibleCols, colCount, t,
-  onToggle, onFormChange, onSave, onRouteSheet, onWaybill, onCmrOverlay, onAssignDevice, onUnassignDevice, onSetNow, onLoaderLookup, onPatchStopsEqc,
-  canModifyStops, canDeleteTour, onRemoveStop, onAddStop, pdvs,
+  onToggle, onFormChange, onSave, onRouteSheet, onWaybill, onCmrOverlay, onAssignDevice, onUnassignDevice, onSetNow, onLoaderLookup, onPatchStopsEqc, onRefresh,
+  canModifyStops, canDeleteTour, canReassign, onRemoveStop, onAddStop, pdvs,
   onUpdateStopEqc, onDeclareRaq, onReorderStops, onDeleteTour,
 }: TourRowProps) {
   const vehicleLabel = contract?.vehicle_code
@@ -1590,6 +1702,9 @@ function TourRow({
                   availableEqcByPdv={availableEqcByPdv}
                   onAdd={(pdvId, eqpCount) => onAddStop(tour.id, pdvId, eqpCount)}
                 />
+              )}
+              {canReassign && !tour.departure_signal_time && tour.departure_time && (
+                <ReassignInline tour={tour} onDone={onRefresh} />
               )}
               {/* Supprimer la tournée (#37) : sans ce bouton, retirer les PDV un
                   par un butait sur le dernier et les volumes restaient bloqués. */}

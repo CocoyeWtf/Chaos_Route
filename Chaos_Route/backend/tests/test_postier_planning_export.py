@@ -93,3 +93,36 @@ async def test_postier_planning_layout_and_order(client, db_session, test_region
     assert ws.cell(8, 1).value == 2
     assert ws.cell(8, 9).value == "N"
     assert ws.cell(8, 14).value == "6307 (Dison)"
+
+
+@pytest.mark.asyncio
+async def test_contract_goes_to_driver_column_not_semi(client, db_session, test_region):
+    """#114 — Le contrat presté sortait dans « Semi », avec son code long Infolog.
+
+    Il désigne le moyen presté, donc la ligne « Chauffeurs » : on y met son code
+    COURT ; « Semi » ne reçoit qu'une vraie semi (n° saisi par le postier).
+    """
+    from app.models.contract import Contract
+    from app.models.tour import Tour, TourStatus
+
+    base = await _make_base(db_session, test_region)
+    contract = Contract(code=f"Baeskens {uuid.uuid4().hex[:2]}", vehicle_code="08000123",
+                        transporter_name="PASCALB", region_id=test_region.id)
+    db_session.add(contract)
+    await db_session.commit()
+    t1 = Tour(date="2026-08-09", delivery_date="2026-08-09", code=f"C-{uuid.uuid4().hex[:4]}",
+              base_id=base.id, status=TourStatus.VALIDATED, departure_time="08:00",
+              contract_id=contract.id, priority=1)
+    t2 = Tour(date="2026-08-09", delivery_date="2026-08-09", code=f"D-{uuid.uuid4().hex[:4]}",
+              base_id=base.id, status=TourStatus.VALIDATED, departure_time="09:00",
+              contract_id=contract.id, priority=2, driver_name="Massager 2", trailer_number="888")
+    db_session.add_all([t1, t2])
+    await db_session.commit()
+
+    resp = await client.get("/api/exports/postier-planning", params={"date": "2026-08-09", "base_id": base.id})
+    assert resp.status_code == 200, resp.text
+    ws = load_workbook(io.BytesIO(resp.content))["Tours"]
+    assert ws.cell(7, 6).value == contract.code       # Chauffeurs = code court du contrat
+    assert ws.cell(7, 8).value in (None, "")          # Semi vide, plus de 08000123
+    assert ws.cell(8, 6).value == "Massager 2"        # un nom saisi prime
+    assert ws.cell(8, 8).value == "888"               # Semi = n° saisi

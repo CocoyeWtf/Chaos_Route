@@ -61,6 +61,20 @@ def _a_la_permission(user: User, resource: str, action: str) -> bool:
     )
 
 
+def _destinataire_des_rappels(user: User) -> bool:
+    """#108 — Les bandeaux ne s'adressent qu'aux profils désignés (R-Cam).
+
+    Pas de passe-droit superadmin ici, contrairement à `_a_la_permission` :
+    un administrateur technique n'a pas à être sollicité chaque lundi. Un
+    superadmin qui porte AUSSI le rôle R-Cam les reçoit, par ce rôle. /
+    No superadmin bypass: only roles explicitly holding reminders:read.
+    """
+    return any(
+        p.resource == "reminders" and p.action == "read"
+        for role in user.roles for p in role.permissions
+    )
+
+
 async def _accuse_existe(db: AsyncSession, cle: str, periode: str) -> ReminderAck | None:
     return (await db.execute(
         select(ReminderAck).where(
@@ -102,6 +116,8 @@ async def list_reminders(
     """
     maintenant = datetime.now()
     rappels: list[dict] = []
+    if not _destinataire_des_rappels(user):
+        return rappels
 
     # ── #26 : prix du carburant, chaque lundi a 8 h ───────────────────────
     if _a_la_permission(user, "fuel-prices", "update"):

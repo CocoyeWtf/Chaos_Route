@@ -106,6 +106,10 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const [baseConflictDialog, setBaseConflictDialog] = useState<{ volume: Volume; tourBaseId: number } | null>(null)
   /* Filtre température pour carte + liste volumes / Temperature filter for map + volume list */
   const [tempFilters, setTempFilters] = useState<Set<TemperatureClass>>(new Set())
+  /* Groupe de livraison A/B (#69, #118) : remonté du panneau pour que la carte
+     (intégrée ET détachée) applique le même filtre que la liste. /
+     Delivery wave filter lifted up so the map follows the panel (#118). */
+  const [groupFilter, setGroupFilter] = useState<'' | 'A' | 'B'>('')
   /* Filtre base d'origine (ticket #20) : différencier le lieu de départ des volumes SEC */
   const [baseFilters, setBaseFilters] = useState<Set<number>>(new Set())
   /* Envoyer la tournée au « pot » plutôt que dans la journée affichée (#92).
@@ -311,10 +315,16 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
      Un PDV reste 'unassigned' s'il a encore des volumes non consommés (découpage). /
      Volume status per PDV for map, filtered by temperature.
      A PDV stays 'unassigned' if it still has unconsumed volumes (split). */
+  const groupPdvIds = useMemo(
+    () => (groupFilter ? new Set(pdvs.filter((p) => p.delivery_group === groupFilter).map((p) => p.id)) : null),
+    [pdvs, groupFilter],
+  )
+
   const pdvVolumeStatusMap = useMemo(() => {
     const m = new Map<number, PdvVolumeStatus>()
     for (const v of allDayVolumes) {
       if (tempFilters.size > 0 && !tempFilters.has(v.temperature_class)) continue
+      if (groupPdvIds && !groupPdvIds.has(v.pdv_id)) continue
       /* Volume non affecté à un autre tour ET non consommé par le tour en cours → unassigned /
          Not assigned to another tour AND not consumed by current tour → unassigned */
       if (!v.tour_id && !consumedVolumeIds.has(v.id)) {
@@ -326,12 +336,14 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
        ils sont prioritaires. / Left-at-dock volumes get their own colour. */
     for (const v of allDayVolumes) {
       if (tempFilters.size > 0 && !tempFilters.has(v.temperature_class)) continue
+      if (groupPdvIds && !groupPdvIds.has(v.pdv_id)) continue
       if (v.is_raq && !v.tour_id && !consumedVolumeIds.has(v.id)) {
         m.set(v.pdv_id, 'raq')
       }
     }
     for (const v of allDayVolumes) {
       if (tempFilters.size > 0 && !tempFilters.has(v.temperature_class)) continue
+      if (groupPdvIds && !groupPdvIds.has(v.pdv_id)) continue
       if (v.tour_id || consumedVolumeIds.has(v.id)) {
         /* Ne pas écraser 'unassigned' — le PDV a encore des volumes restants /
            Don't overwrite 'unassigned' — the PDV still has remaining volumes */
@@ -339,7 +351,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       }
     }
     return m
-  }, [allDayVolumes, consumedVolumeIds, tempFilters])
+  }, [allDayVolumes, consumedVolumeIds, tempFilters, groupPdvIds])
 
   /* EQC par PDV ventilé par température — uniquement les volumes restants
      (non consommés par le tour en cours, non affectés à un autre tour).
@@ -351,6 +363,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
     const m = new Map<number, Record<string, number>>()
     for (const v of allDayVolumes) {
       if (tempFilters.size > 0 && !tempFilters.has(v.temperature_class)) continue
+      if (groupPdvIds && !groupPdvIds.has(v.pdv_id)) continue
       /* Filtre de base d'origine (#94). Il était appliqué au panneau latéral et
          aux clics sur la carte (#23), mais PAS au compteur d'EQC affiché sur le
          point de vente : un PDV servi depuis Gosselies ET Trazegnies cumulait
@@ -366,7 +379,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       m.set(v.pdv_id, existing)
     }
     return m
-  }, [allDayVolumes, consumedVolumeIds, tempFilters, baseFilters])
+  }, [allDayVolumes, consumedVolumeIds, tempFilters, baseFilters, groupPdvIds])
 
   const pdvMap = useMemo(() => new Map(pdvs.map((p) => [p.id, p])), [pdvs])
 
@@ -778,12 +791,13 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       v.pdv_id === pdv.id
       && !consumedVolumeIds.has(v.id)
       && (tempFilters.size === 0 || tempFilters.has(v.temperature_class))
+      && (!groupPdvIds || groupPdvIds.has(v.pdv_id))
     )
     if (!vol) return
     const maxEqp = selectedVehicleType ? Math.max(remaining115, 0) : vol.eqp_count
     setSplitDialog({ volume: vol, maxEqp })
     setSplitEqp(Math.min(vol.eqp_count, maxEqp))
-  }, [tourMode, filteredVolumes, consumedVolumeIds, selectedVehicleType, remaining115, tempFilters])
+  }, [tourMode, filteredVolumes, consumedVolumeIds, selectedVehicleType, remaining115, tempFilters, groupPdvIds])
 
   const handlePdvClick = (pdv: PDV) => {
     if (tourMode === 'pickup') {
@@ -800,6 +814,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
       v.pdv_id === pdv.id
       && !consumedVolumeIds.has(v.id)
       && (tempFilters.size === 0 || tempFilters.has(v.temperature_class))
+      && (!groupPdvIds || groupPdvIds.has(v.pdv_id))
     )
     if (vols.length === 0) return
     for (const vol of vols) {
@@ -1830,6 +1845,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                           tempFilters={tempFilters}
                           onTempFiltersChange={setTempFilters}
                           baseFilters={baseFilters}
+                          groupFilter={groupFilter}
+                          onGroupFilterChange={setGroupFilter}
                           onBaseFiltersChange={setBaseFilters}
                           availableBases={availableBases}
                         />
@@ -1957,6 +1974,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                               tempFilters={tempFilters}
                               onTempFiltersChange={setTempFilters}
                               baseFilters={baseFilters}
+                          groupFilter={groupFilter}
+                          onGroupFilterChange={setGroupFilter}
                               onBaseFiltersChange={setBaseFilters}
                               availableBases={availableBases}
                             />
@@ -2054,6 +2073,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
               tempFilters={tempFilters}
               onTempFiltersChange={setTempFilters}
               baseFilters={baseFilters}
+                          groupFilter={groupFilter}
+                          onGroupFilterChange={setGroupFilter}
               onBaseFiltersChange={setBaseFilters}
               availableBases={availableBases}
             />

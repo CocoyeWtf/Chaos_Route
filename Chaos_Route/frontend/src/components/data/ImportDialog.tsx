@@ -9,6 +9,15 @@ interface DuplicateInfo {
   existing: { date?: string; dispatch_date?: string; dispatch_time?: string; base: string; count: number }[]
   total_existing: number
   new_row_count: number
+  planned_tours?: string[]
+  other_bases?: { base: string; count: number }[]
+}
+
+/* #87 — Le jour porte déjà des volumes d'autres bases : confirmer la base. */
+interface BaseWarning {
+  importing_base: string
+  other_bases: { base: string; count: number }[]
+  new_row_count: number
 }
 
 interface ImportDialogProps {
@@ -26,6 +35,7 @@ export function ImportDialog({ open, onClose, entityType, onSuccess }: ImportDia
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const [duplicateWarning, setDuplicateWarning] = useState<DuplicateInfo | null>(null)
+  const [baseWarning, setBaseWarning] = useState<BaseWarning | null>(null)
   const [dispatchDate, setDispatchDate] = useState('')
   const [dispatchTime, setDispatchTime] = useState('')
   const [activityType, setActivityType] = useState('')
@@ -77,12 +87,21 @@ export function ImportDialog({ open, onClose, entityType, onSuccess }: ImportDia
         setDuplicateWarning(resp.data)
         return
       }
+      if (resp.data.status === 'base_warning') {
+        setBaseWarning(resp.data)
+        return
+      }
+      setBaseWarning(null)
 
       setDuplicateWarning(null)
       setResult(resp.data.message || 'Import réussi')
       onSuccess()
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Erreur lors de l'import"
+      // Le détail serveur dit POURQUOI (ex. #116 : remplacement refusé) /
+      // Surface the server detail, not the generic axios message
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const message = typeof detail === 'string' ? detail
+        : err instanceof Error ? err.message : "Erreur lors de l'import"
       setError(message)
     } finally {
       setLoading(false)
@@ -96,6 +115,7 @@ export function ImportDialog({ open, onClose, entityType, onSuccess }: ImportDia
   const handleFileChange = (f: File | null) => {
     setFile(f)
     setDuplicateWarning(null)
+    setBaseWarning(null)
     setError(null)
     setResult(null)
     setDispatchDate('')
@@ -243,6 +263,36 @@ export function ImportDialog({ open, onClose, entityType, onSuccess }: ImportDia
             </div>
           )}
 
+          {/* #87 : la journée porte déjà d'autres bases / Other bases already loaded */}
+          {baseWarning && (
+            <div className="rounded-lg border p-4 space-y-2" style={{ backgroundColor: 'rgba(249,115,22,0.08)', borderColor: 'var(--color-warning)' }}>
+              <p className="text-sm font-semibold" style={{ color: 'var(--color-warning)' }}>
+                Vous importez {baseWarning.new_row_count} ligne(s) sur <strong>{baseWarning.importing_base}</strong>
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                Ce jour porte déjà des volumes de : {baseWarning.other_bases.map((b) => `${b.base} (${b.count})`).join(', ')}.
+                Vérifiez que la base d'origine est la bonne.
+              </p>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => { setBaseWarning(null); doImport('append') }}
+                  disabled={loading}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--color-primary)' }}
+                >
+                  {loading ? '...' : 'Confirmer la base et importer'}
+                </button>
+                <button
+                  onClick={() => setBaseWarning(null)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border"
+                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+                >
+                  Corriger
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Alerte doublons / Duplicate warning */}
           {duplicateWarning && (
             <div className="rounded-lg border p-4 space-y-2" style={{ backgroundColor: 'rgba(249,115,22,0.08)', borderColor: 'var(--color-warning)' }}>
@@ -263,10 +313,22 @@ export function ImportDialog({ open, onClose, entityType, onSuccess }: ImportDia
                 {' — '}
                 {t('import.newRows', { count: duplicateWarning.new_row_count })}
               </p>
+              {duplicateWarning.other_bases && duplicateWarning.other_bases.length > 0 && (
+                <p className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                  Ce jour porte aussi des volumes de : {duplicateWarning.other_bases.map((b) => `${b.base} (${b.count})`).join(', ')}.
+                </p>
+              )}
+              {duplicateWarning.planned_tours && duplicateWarning.planned_tours.length > 0 && (
+                <p className="text-xs font-semibold" style={{ color: 'var(--color-danger)' }}>
+                  {duplicateWarning.planned_tours.length} tournée(s) utilisent déjà ces volumes
+                  ({duplicateWarning.planned_tours.slice(0, 8).join(', ')}{duplicateWarning.planned_tours.length > 8 ? ' …' : ''}).
+                  Le remplacement est impossible tant qu'elles existent : il viderait ces tournées.
+                </p>
+              )}
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={handleReplace}
-                  disabled={loading}
+                  disabled={loading || (duplicateWarning.planned_tours?.length ?? 0) > 0}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
                   style={{ backgroundColor: 'var(--color-danger)' }}
                 >
@@ -304,7 +366,7 @@ export function ImportDialog({ open, onClose, entityType, onSuccess }: ImportDia
             >
               {t('common.cancel')}
             </button>
-            {!duplicateWarning && (
+            {!duplicateWarning && !baseWarning && (
               <button
                 onClick={handleImport}
                 disabled={!file || loading}

@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_permission
+from app.api.deps import require_permission, get_current_user, enforce_pdv_scope
 from app.database import get_db
 from app.models.pdv import PDV
 from app.models.pdv_support_rule import PdvSupportRule
@@ -24,6 +24,29 @@ from app.models.user import User
 from app.utils.support_rules import is_return_support_code
 
 router = APIRouter()
+
+
+def _a_droit(user: User, resource: str, action: str) -> bool:
+    if user.is_superadmin:
+        return True
+    return any(p.resource == resource and p.action == action
+               for role in user.roles for p in role.permissions)
+
+
+def _peut_modifier(user: User, pdv_id: int) -> None:
+    """#105 — Le magasin règle LUI-MÊME ses supports, et seulement les siens.
+
+    Samuel : « chaque PDV [doit] pouvoir modifier les supports qui apparaissent
+    UNIQUEMENT pour son propre PDV ». Un compte rattaché à un PDV modifie donc
+    ce PDV-là sans droit `support-types:update` ; le transport garde la main
+    sur tous les magasins (et seul lui copie une configuration vers d'autres).
+    / A store account edits its own PDV only; staff keep global rights.
+    """
+    if _a_droit(user, "support-types", "update"):
+        return
+    if user.pdv_id is not None and user.pdv_id == pdv_id:
+        return
+    raise HTTPException(status_code=403, detail="Accès limité aux supports de votre PDV")
 
 
 class SupportVisibility(BaseModel):
@@ -91,7 +114,11 @@ async def list_configurable_pdvs(
     Le compteur evite d'avoir a ouvrir chaque magasin pour savoir lesquels ont
     ete regles.
     """
-    pdv_result = await db.execute(select(PDV).order_by(PDV.code))
+    query = select(PDV).order_by(PDV.code)
+    own_pdv = enforce_pdv_scope(user, None)
+    if own_pdv is not None:
+        query = query.where(PDV.id == own_pdv)  # #105 : le magasin ne voit que lui
+    pdv_result = await db.execute(query)
     pdvs = pdv_result.scalars().all()
 
     rules_result = await db.execute(
@@ -119,6 +146,7 @@ async def get_pdv_rules(
     user: User = Depends(require_permission("support-types", "read")),
 ):
     """Supports retournables d'un PDV avec leur visibilite / A PDV's supports and visibility."""
+    enforce_pdv_scope(user, pdv_id)  # #105 : un magasin ne lit que les siens
     pdv = await db.get(PDV, pdv_id)
     if not pdv:
         raise HTTPException(status_code=404, detail="PDV introuvable")
@@ -148,7 +176,7 @@ async def set_pdv_rules(
     pdv_id: int,
     data: BulkVisibilityRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("support-types", "update")),
+    user: User = Depends(get_current_user),
 ):
     """Enregistrer les reglages d'un PDV / Save a PDV's settings.
 
@@ -157,6 +185,7 @@ async def set_pdv_rules(
     ne garde donc que les exceptions, et un support rendu a tout le monde ne
     laisse pas de ligne morte derriere lui.
     """
+    _peut_modifier(user, pdv_id)
     pdv = await db.get(PDV, pdv_id)
     if not pdv:
         raise HTTPException(status_code=404, detail="PDV introuvable")

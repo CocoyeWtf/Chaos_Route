@@ -543,7 +543,8 @@ export default function DriverWorksheet() {
                   const over = t.capacity_eqp != null && (t.total_eqp ?? 0) > t.capacity_eqp
                   const semi = t.trailer_number
                     || (t.vehicle_id ? vehicleMap.get(t.vehicle_id)?.code : undefined)
-                    || (contract?.vehicle_code ?? '')
+                    // Pas le vehicle_code du contrat : c'est le code long Infolog (#114)
+                    || ''
                   const cellBorder = { borderColor: 'var(--border-color)' }
                   return (
                     <tr

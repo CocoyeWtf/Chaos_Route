@@ -22,6 +22,7 @@ const KmTax = lazy(() => import('./pages/KmTax'))
 const BaseActivityManagement = lazy(() => import('./pages/BaseActivityManagement'))
 const ParameterSettings = lazy(() => import('./pages/ParameterSettings'))
 const TourPlanning = lazy(() => import('./pages/TourPlanning'))
+const DriverWorksheet = lazy(() => import('./pages/DriverWorksheet'))
 const TourHistory = lazy(() => import('./pages/TourHistory'))
 const TransporterSummary = lazy(() => import('./pages/TransporterSummary'))
 const LoaderManagement = lazy(() => import('./pages/LoaderManagement'))
@@ -116,6 +117,7 @@ export default function App() {
             <Route path="/base-activities" element={<BaseActivityManagement />} />
             <Route path="/parameters" element={<ParameterSettings />} />
             <Route path="/tour-planning" element={<TourPlanning />} />
+            <Route path="/driver-worksheet" element={<DriverWorksheet />} />
             <Route path="/tour-history" element={<TourHistory />} />
             <Route path="/transporter-summary" element={<TransporterSummary />} />
             <Route path="/loaders" element={<LoaderManagement />} />

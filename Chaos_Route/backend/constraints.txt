@@ -2,7 +2,6 @@
 # Le build et la CI installent requirements.txt SOUS ces contraintes : l'image
 # ne flotte plus vers la derniere version publiee (incident du 2026-10-09).
 # Monter une version = modifier cette ligne, tester, deployer. / Exact prod pins.
-chaos-route-db-1 Up 5 weeks (healthy)
 absl-py==2.5.1
 aiosmtplib==5.1.3
 aiosqlite==0.22.1

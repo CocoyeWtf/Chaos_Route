@@ -1,7 +1,7 @@
 # Web framework
-fastapi>=0.141.1
+fastapi>=0.165.0
 uvicorn[standard]>=0.53.0
-python-multipart>=0.0.32
+python-multipart>=0.0.34
 
 # Database
 # L'extra [asyncio] n'est pas decoratif : il tire `greenlet`, sans lequel
@@ -16,8 +16,8 @@ python-multipart>=0.0.32
 # frontiere de securite, elle ne change pas de version par accident. /
 # [asyncio] pulls greenlet (2.1 no longer does); the <2.1 ceiling is
 # deliberate: tenant isolation rides on SQLAlchemy events.
-sqlalchemy[asyncio]>=2.0.54,<2.1
-alembic>=1.20.0
+sqlalchemy[asyncio]>=2.1.9,<2.2
+alembic>=1.20.1
 aiosqlite>=0.22.1
 asyncpg>=0.31.0
 
@@ -26,15 +26,15 @@ asyncpg>=0.31.0
 # (PYSEC-2026-1325) et projet non maintenu / PyJWT replaces python-jose
 PyJWT>=2.14.0
 bcrypt>=5.0.0
-pyotp>=2.10.0
+pyotp>=2.12.1
 
 # Rate Limiting
 slowapi>=0.1.10
 
 # Validation
-pydantic>=2.13.5
-pydantic-settings>=2.15.0
-email-validator>=2.3.0
+pydantic>=2.14.4
+pydantic-settings>=2.16.3
+email-validator>=2.4.0
 
 # Email
 aiosmtplib>=5.1.3
@@ -47,6 +47,6 @@ xlrd>=2.0.2
 ortools>=9.15.6755
 
 # Testing
-pytest>=9.1.1
-pytest-asyncio>=1.4.0
+pytest>=9.2.0
+pytest-asyncio>=1.5.0
 httpx>=0.28.1

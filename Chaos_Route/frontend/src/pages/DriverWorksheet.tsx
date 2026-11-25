@@ -59,6 +59,33 @@ interface DisplayAlert {
 }
 
 /* Minutes -> « H:MM » (négatif accepté) / Minutes -> "H:MM" (negative allowed) */
+/* #89 — Gabarit imposé par les PDV de la tournée (fiche PDV, « types de
+   véhicules autorisés »). Gaetan : « proposer une semi spécifique pour certains
+   PDV afin que le quai ne se trompe pas : une semi courte pour le 9862, un
+   porteur surbaissé pour le 13151 ». Rien à signaler si la semi standard passe
+   partout ; sinon le plus grand gabarit accepté par TOUS les PDV. /
+   Largest vehicle type accepted by every stop, when a standard semi is not. */
+const GABARITS: [string, string][] = [
+  ['SEMI_COURTE', 'Semi courte'],
+  ['PORTEUR_REMORQUE', 'Porteur + remorque'],
+  ['PORTEUR', 'Porteur'],
+  ['PORTEUR_SURBAISSE', 'Porteur surbaissé'],
+  ['CITY', 'City'],
+  ['VL', 'VL'],
+]
+
+function gabaritImpose(pdvList: (PDV | undefined)[]): { label: string; pdvs: string[] } | null {
+  const listes = pdvList
+    .filter((p): p is PDV => !!p?.allowed_vehicle_types)
+    .map((p) => ({ code: p.code, types: (p.allowed_vehicle_types ?? '').split('|').filter(Boolean) }))
+  if (listes.length === 0) return null
+  const contraints = listes.filter((l) => !l.types.includes('SEMI')).map((l) => l.code)
+  const final = listes.slice(1).reduce((acc, l) => acc.filter((x) => l.types.includes(x)), listes[0].types)
+  if (final.includes('SEMI')) return null
+  const found = GABARITS.find(([k]) => final.includes(k))
+  return { label: found ? found[1] : 'Aucun gabarit commun', pdvs: contraints }
+}
+
 function fmtHM(min: number | null | undefined): string {
   if (min == null || Number.isNaN(min)) return '—'
   const sign = min < 0 ? '-' : ''
@@ -581,7 +608,17 @@ export default function DriverWorksheet() {
                       </td>
                       {/* #114 : presté = code court du contrat (« 123 ») dans Trac */}
                       <td className={td} style={cellBorder}>{t.tractor_id ? (vehicleMap.get(t.tractor_id)?.code ?? `#${t.tractor_id}`) : (contract?.code ?? '')}</td>
-                      <td className={td} style={cellBorder}>{semi}</td>
+                      <td className={td} style={cellBorder}>
+                        {semi || (() => {
+                          const g = gabaritImpose(stops.map((st) => pdvMap.get(st.pdv_id)))
+                          return g ? (
+                            <span className="font-semibold" style={{ color: 'var(--color-warning)' }}
+                              title={`Gabarit imposé par la fiche PDV : ${g.pdvs.join(', ')}`}>
+                              ⚠ {g.label}
+                            </span>
+                          ) : ''
+                        })()}
+                      </td>
                       <td className={td} style={cellBorder} title={depBase?.name}>{depBase?.code ?? ''}</td>
                       <td className={td} style={cellBorder} title={arrBase?.name}>{arrBase?.code ?? ''}</td>
                       {Array.from({ length: maxStops }, (_, i) => {

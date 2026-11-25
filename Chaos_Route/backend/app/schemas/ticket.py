@@ -82,3 +82,9 @@ class TicketListItem(TicketRead):
     """Élément de liste avec compteurs d'échanges et de photos / List item with counts."""
     comment_count: int = 0
     photo_count: int = 0
+    # Qui doit agir (ticket non clos) : « USER » = on attend l'auteur (le
+    # dernier message est d'un autre), « SUPPORT » = l'auteur a écrit en
+    # dernier, ou personne ne lui a encore répondu. None = clos / refusé.
+    waiting_on: str | None = None
+    last_message_at: datetime | None = None
+    last_message_by: str | None = None

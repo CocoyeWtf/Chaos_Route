@@ -1,6 +1,6 @@
 /* Historique des tours / Tour history page */
 
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useApi } from '../hooks/useApi'
 import { useAppStore } from '../stores/useAppStore'
@@ -28,6 +28,13 @@ export default function TourHistory() {
   const [costTourId, setCostTourId] = useState<number | null>(null)
   const [gpsTour, setGpsTour] = useState<{ id: number; code: string } | null>(null)
   const [exporting, setExporting] = useState(false)
+  /* #117 : ce que le tableau affiche après filtres, pour l'export */
+  const filteredRef = useRef<{ rows: Tour[]; isFiltered: boolean }>({ rows: [], isFiltered: false })
+  const [filteredCount, setFilteredCount] = useState<number | null>(null)
+  const onFilteredChange = useCallback((rows: Tour[], isFiltered: boolean) => {
+    filteredRef.current = { rows, isFiltered }
+    setFilteredCount(isFiltered ? rows.length : null)
+  }, [])
 
   const params = selectedRegionId ? { region_id: selectedRegionId } : undefined
   const { data: tours, loading, refetch } = useApi<Tour>('/tours', params)
@@ -56,7 +63,8 @@ export default function TourHistory() {
   const handleExport = async () => {
     setExporting(true)
     try {
-      await downloadTourHistory(selectedRegionId)
+      const f = filteredRef.current
+      await downloadTourHistory(selectedRegionId, f.isFiltered ? f.rows.map((r) => r.id) : null)
     } catch (e) {
       console.error('Failed to export tour history', e)
     } finally {
@@ -334,7 +342,7 @@ export default function TourHistory() {
             disabled={exporting || loading}
             title="Exporter l'historique des tours en Excel"
           >
-            {exporting ? '...' : '⬇ Exporter Excel'}
+            {exporting ? '...' : filteredCount != null ? `⬇ Exporter Excel (${filteredCount} filtrée${filteredCount > 1 ? 's' : ''})` : '⬇ Exporter Excel'}
           </button>
         )}
       </div>
@@ -348,6 +356,7 @@ export default function TourHistory() {
           searchKeys={['code', 'date']}
           searchText={(row) => pdvLabels(row).map((p) => `${p.code} ${p.name} ${p.city ?? ''}`).join(' ')}
           onRowClick={(row) => setCostTourId(row.id)}
+          onFilteredChange={onFilteredChange}
         />
       )}
 

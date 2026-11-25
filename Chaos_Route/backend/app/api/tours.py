@@ -23,7 +23,7 @@ from app.models.distance_matrix import DistanceMatrix
 from app.models.km_tax import KmTax
 from app.models.parameter import Parameter
 from app.models.pdv import PDV
-from app.models.tour import Tour, TourStatus, TourType, PICKUP_TYPES, return_base_of
+from app.models.tour import Tour, TourStatus, TourType, PICKUP_TYPES, return_base_of, navette_destination_of
 from app.models.tour_stop import TourStop
 from app.models.tour_surcharge import TourSurcharge, SurchargeStatus
 from app.models.volume import Volume
@@ -160,6 +160,7 @@ async def calculate_tour_times(
     return_base_id: int | None = None,
     final_pickup_supplier_id: int | None = None,
     final_pickup_duration_minutes: int | None = None,
+    via_base_id: int | None = None,
 ) -> tuple[list[dict], str, int]:
     """
     Calculer les temps à chaque arrêt / Calculate times at each stop.
@@ -236,6 +237,14 @@ async def calculate_tour_times(
             return_minutes = return_dist.duration_minutes if return_dist else 0
         return_dt = current_time + timedelta(minutes=return_minutes)
         return_time = _format_time(return_dt)
+    elif via_base_id and via_base_id != base_id:
+        # Navette aller-retour (#123) : départ -> base desservie, temps sur
+        # place, puis retour. / Round-trip navette: out, on site, back.
+        aller = await _get_distance(db, "BASE", base_id, "BASE", via_base_id)
+        retour = await _get_distance(db, "BASE", via_base_id, "BASE", ret_base_id)
+        on_site = final_pickup_duration_minutes or default_dock
+        minutes = (aller.duration_minutes if aller else 0) + on_site + (retour.duration_minutes if retour else 0)
+        return_time = _format_time(current_time + timedelta(minutes=minutes))
     elif ret_base_id != base_id:
         # Navette (#123) : aucun PDV, mais un vrai trajet de base à base et un
         # temps sur place (déchargement à l'arrivée). Elle durait 0 minute :
@@ -260,6 +269,7 @@ async def calculate_tour_times(
 def _build_segments(
     base_id: int, stops: list[dict], return_base_id: int | None = None,
     final_pickup_supplier_id: int | None = None,
+    via_base_id: int | None = None,
 ) -> list[tuple[str, int, str, int]]:
     """Construire la liste des segments du tour / Build list of tour segments.
 
@@ -287,6 +297,10 @@ def _build_segments(
             segments.append(("SUPPLIER", final_pickup_supplier_id, "BASE", ret_base))
         else:
             segments.append(("PDV", sorted_stops[-1]["pdv_id"], "BASE", ret_base))
+    elif via_base_id and via_base_id != base_id:
+        # Navette aller-retour (#123) : deux trajets, aller puis retour.
+        segments.append(("BASE", base_id, "BASE", via_base_id))
+        segments.append(("BASE", via_base_id, "BASE", return_base_id or base_id))
     elif return_base_id and return_base_id != base_id:
         # Navette (#123) : le seul trajet est base -> base d'arrivée.
         segments.append(("BASE", base_id, "BASE", return_base_id))
@@ -328,6 +342,7 @@ async def _calculate_cost(
     own_trailer: bool = False,
     return_base_id: int | None = None,
     final_pickup_supplier_id: int | None = None,
+    via_base_id: int | None = None,
 ) -> tuple[float, list[str]]:
     """Calculer le coût du tour / Calculate tour cost.
 
@@ -394,7 +409,8 @@ async def _calculate_cost(
     # 3. Taxe km (montant forfaitaire par segment, pas un taux/km)
     # Km tax (flat amount per segment, not a rate per km)
     km_tax_total = 0.0
-    segments = _build_segments(tour_base_id, stops, return_base_id, final_pickup_supplier_id)
+    segments = _build_segments(tour_base_id, stops, return_base_id, final_pickup_supplier_id,
+                               via_base_id=via_base_id)
     for seg in segments:
         tax_entry = await db.scalar(
             select(KmTax.tax_per_km).where(
@@ -442,6 +458,7 @@ async def _recalculate_sibling_tours(
             own_trailer=bool(getattr(tour, "vehicle_id", None)),
             return_base_id=tour.return_base_id,
             final_pickup_supplier_id=tour.final_pickup_supplier_id,
+            via_base_id=tour.navette_via_base_id,
         )
         if tour.total_cost != new_cost:
             tour.total_cost = new_cost
@@ -605,6 +622,42 @@ async def list_tours(
     query = query.order_by(Tour.id.desc()).offset(offset).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
+
+
+@router.get("/estimated-durations")
+async def estimated_durations(
+    date: str = Query(..., description="Date de la feuille (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_permission(("tour-planning", "read"), ("operations", "read"))),
+) -> dict[int, int]:
+    """Durée estimée des tournées du jour pas encore ordonnancées (#89).
+
+    La durée d'une tournée n'est calculée qu'à l'ordonnancement, avec l'heure
+    de départ. Sur la feuille de travail, placer un chauffeur sur une tournée
+    pas encore ordonnancée ne lui retirait donc rien de ses 12 h (Gaetan :
+    « le temps de la tournée ne se déduisait pas »). Les trajets et les temps
+    de quai ne dépendent pas de l'heure : on les additionne depuis minuit,
+    sans rien enregistrer. / Estimated durations, nothing persisted.
+    """
+    tours = (await db.execute(
+        select(Tour).where(Tour.date == date, Tour.total_duration_minutes.is_(None))
+        .options(selectinload(Tour.stops))
+    )).scalars().all()
+    out: dict[int, int] = {}
+    for t in tours:
+        stops_data = [
+            {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
+            for s in sorted(t.stops, key=lambda s: s.sequence_order)
+        ]
+        if not stops_data and not t.navette_via_base_id and not t.return_base_id:
+            continue
+        _, _, minutes = await calculate_tour_times(
+            "00:00", stops_data, t.base_id, db, t.return_base_id,
+            t.final_pickup_supplier_id, t.final_pickup_duration_minutes,
+            via_base_id=t.navette_via_base_id,
+        )
+        out[t.id] = minutes
+    return out
 
 
 @router.get("/available-contracts", response_model=list)
@@ -862,7 +915,7 @@ async def _build_cmro_rows(db, date_from, date_to, base_id, transporter_name, us
             for s in sorted(t.stops, key=lambda s: s.sequence_order)
         ]
         km_tax_total = 0.0
-        for seg in _build_segments(t.base_id, stops_data, t.return_base_id, t.final_pickup_supplier_id):
+        for seg in _build_segments(t.base_id, stops_data, t.return_base_id, t.final_pickup_supplier_id, via_base_id=t.navette_via_base_id):
             tax = await db.scalar(select(KmTax.tax_per_km).where(
                 KmTax.origin_type == seg[0], KmTax.origin_id == seg[1],
                 KmTax.destination_type == seg[2], KmTax.destination_id == seg[3],
@@ -1289,7 +1342,7 @@ async def transporter_summary(
             {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
             for s in sorted(tour.stops, key=lambda s: s.sequence_order)
         ]
-        segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id)
+        segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id, via_base_id=tour.navette_via_base_id)
         km_tax_total = 0.0
         for seg in segments:
             tax_entry = await db.scalar(
@@ -1542,6 +1595,8 @@ async def get_tour_time_breakdown(
     base = await db.get(BaseLogistics, tour.base_id)
     ret_base = await db.get(BaseLogistics, tour.return_base_id) if tour.return_base_id else base
     base_names = {tour.base_id: base, return_base_of(tour): ret_base}
+    if tour.navette_via_base_id:
+        base_names[tour.navette_via_base_id] = await db.get(BaseLogistics, tour.navette_via_base_id)
     fin_sup = (
         await db.get(Supplier, tour.final_pickup_supplier_id)
         if tour.final_pickup_supplier_id else None
@@ -1552,7 +1607,7 @@ async def get_tour_time_breakdown(
         {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
         for s in sorted_stops
     ]
-    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id)
+    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id, via_base_id=tour.navette_via_base_id)
 
     segment_details = []
     total_travel = 0
@@ -1787,6 +1842,8 @@ class NavetteCreate(BaseModel):
     departure_time: str | None = None
     temperature_type: str | None = None
     remarks: str | None = None
+    # #123 : la navette revient sur sa base de départ après avoir déposé.
+    round_trip: bool = False
 
 
 class NavetteArriveRequest(BaseModel):
@@ -1874,8 +1931,10 @@ async def create_navette(
         delivery_date=data.date,
         base_id=data.base_id,
         # La navette se TERMINE sur la base d'arrivee : c'est exactement ce que
-        # `return_base_id` exprime depuis le #64, kilometres compris.
-        return_base_id=data.destination_base_id,
+        # `return_base_id` exprime depuis le #64, kilometres compris. En
+        # aller-retour (#123), elle y passe et revient : base desservie.
+        return_base_id=None if data.round_trip else data.destination_base_id,
+        navette_via_base_id=data.destination_base_id if data.round_trip else None,
         tour_type=TourType.NAVETTE,
         status=TourStatus.DRAFT,
         vehicle_type=data.vehicle_type,
@@ -1894,6 +1953,7 @@ async def create_navette(
     await _log_audit(db, "tour", tour.id, "CREATE_NAVETTE", user, {
         "base_id": data.base_id,
         "destination_base_id": data.destination_base_id,
+        "round_trip": data.round_trip,
         "volume_ids": [v.id for v in volumes],
     })
     await db.flush()
@@ -1913,7 +1973,8 @@ async def create_navette(
                     tour.id,
                     TourSchedule(
                         contract_id=data.contract_id, departure_time=data.departure_time,
-                        delivery_date=data.date, return_base_id=data.destination_base_id,
+                        delivery_date=data.date,
+                        return_base_id=None if data.round_trip else data.destination_base_id,
                     ),
                     force=True, allow_overlap=True, db=db, user=user,
                 )
@@ -1922,17 +1983,27 @@ async def create_navette(
                 avertissements.append(f"Coût non calculé : {exc.detail}")
         if not planifiee:
             _, ret, duree = await calculate_tour_times(
-                data.departure_time, [], data.base_id, db, return_base_id=data.destination_base_id,
+                data.departure_time, [], data.base_id, db, return_base_id=tour.return_base_id,
+                via_base_id=tour.navette_via_base_id,
             )
             tour.return_time = ret
             tour.total_duration_minutes = duree
-            leg = await _get_distance(db, "BASE", data.base_id, "BASE", data.destination_base_id)
-            tour.total_km = round(float(leg.distance_km), 2) if leg else 0
+            km = 0.0
+            for seg in _build_segments(data.base_id, [], tour.return_base_id, via_base_id=tour.navette_via_base_id):
+                leg = await _get_distance(db, *seg)
+                km += float(leg.distance_km) if leg else 0.0
+            tour.total_km = round(km, 2)
         await db.flush()
-        if not await _get_distance(db, "BASE", data.base_id, "BASE", data.destination_base_id):
+        manquantes = [
+            seg for seg in _build_segments(data.base_id, [], tour.return_base_id, via_base_id=tour.navette_via_base_id)
+            if not await _get_distance(db, *seg)
+        ]
+        if manquantes:
+            codes = {depart.id: depart.code, arrivee.id: arrivee.code}
+            trajets = ", ".join(f"{codes.get(s[1], s[1])} → {codes.get(s[3], s[3])}" for s in manquantes)
             avertissements.append(
-                f"Distance {depart.code} → {arrivee.code} absente du distancier : "
-                "seul le temps sur place est compté."
+                f"Distance {trajets} absente du distancier : "
+                "seul le temps sur place est compté pour ce trajet."
             )
 
     return {
@@ -1967,7 +2038,7 @@ async def navette_arrive(
     if tour.navette_arrived_at:
         return {"status": "already_arrived", "arrived_at": tour.navette_arrived_at}
 
-    destination = return_base_of(tour)
+    destination = navette_destination_of(tour)
     volumes = (await db.execute(
         select(Volume).where(Volume.tour_id == tour.id)
     )).scalars().all()
@@ -2022,7 +2093,7 @@ async def navette_cancel(
     # Deux cas : navette pas encore arrivee (volumes encore rattaches), ou deja
     # arrivee (volumes relaches sur la base d'arrivee, qu'il faut rapatrier).
     if tour.navette_arrived_at:
-        destination = return_base_of(tour)
+        destination = navette_destination_of(tour)
         journal = json.loads(
             (await db.execute(
                 select(AuditLog.changes)
@@ -2909,6 +2980,7 @@ async def schedule_tour(
     enriched_stops, return_time, total_duration = await calculate_tour_times(
         data.departure_time, stops_data, tour.base_id, db, tour.return_base_id,
         tour.final_pickup_supplier_id, tour.final_pickup_duration_minutes,
+        via_base_id=tour.navette_via_base_id,
     )
 
     # ── Validation véhicule propre / Own vehicle validation ──────────────────
@@ -3091,10 +3163,12 @@ async def schedule_tour(
             db, last_pdv_id, tour.base_id, tour.return_base_id,
             tour.final_pickup_supplier_id,
         )
-    elif tour.return_base_id and tour.return_base_id != tour.base_id:
-        # Navette (#123) : kilomètres du trajet base -> base d'arrivée.
-        leg = await _get_distance(db, "BASE", tour.base_id, "BASE", tour.return_base_id)
-        total_km += float(leg.distance_km) if leg else 0.0
+    elif tour.navette_via_base_id or (tour.return_base_id and tour.return_base_id != tour.base_id):
+        # Navette (#123) : kilomètres des trajets de base à base (aller, et
+        # retour pour une navette aller-retour). / Base-to-base legs.
+        for seg in _build_segments(tour.base_id, [], tour.return_base_id, via_base_id=tour.navette_via_base_id):
+            leg = await _get_distance(db, *seg)
+            total_km += float(leg.distance_km) if leg else 0.0
     total_km = round(total_km, 2)
 
     tour.contract_id = data.contract_id
@@ -3122,6 +3196,7 @@ async def schedule_tour(
             own_trailer=bool(getattr(tour, "vehicle_id", None)),
             return_base_id=tour.return_base_id,
             final_pickup_supplier_id=tour.final_pickup_supplier_id,
+            via_base_id=tour.navette_via_base_id,
         )
         tour.total_cost = total_cost
     else:
@@ -3231,6 +3306,7 @@ async def reorder_tour_stops(
                     own_trailer=bool(getattr(tour, "vehicle_id", None)),
                     return_base_id=tour.return_base_id,
                     final_pickup_supplier_id=tour.final_pickup_supplier_id,
+                    via_base_id=tour.navette_via_base_id,
                 )
 
     await _log_audit(db, "tour", tour.id, "REORDER_STOPS", user, {"stop_order": data.stop_order})
@@ -3468,8 +3544,12 @@ async def reassign_tour(
     tour = await db.get(Tour, tour_id)
     if not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
-    if tour.departure_signal_time:
-        raise HTTPException(status_code=409, detail="Tournée partie (top départ validé) : moyen non modifiable.")
+    # #115 (suite, Gaetan) : « le top départ ne signifie pas que le camion est
+    # parti, cela signifie que les papiers sont faits ». Le moyen reste donc
+    # modifiable jusqu'à la sortie de barrière, ou tant que la tournée n'a pas
+    # démarré sur le téléphone. / Editable until the truck passes the gate.
+    if tour.barrier_exit_time or tour.status in (TourStatus.IN_PROGRESS, TourStatus.RETURNING, TourStatus.COMPLETED):
+        raise HTTPException(status_code=409, detail="Camion parti (sortie barrière ou tournée démarrée) : moyen non modifiable.")
     if not tour.departure_time:
         raise HTTPException(status_code=409, detail="Tournée non ordonnancée : choisissez le moyen depuis l'ordonnancement.")
     if not data.contract_id and not data.tractor_id:
@@ -3830,7 +3910,7 @@ async def get_tour_cost_breakdown(
         {"pdv_id": s.pdv_id, "sequence_order": s.sequence_order, "eqp_count": s.eqp_count}
         for s in sorted(tour.stops, key=lambda s: s.sequence_order)
     ]
-    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id)
+    segments = _build_segments(tour.base_id, stops_data, tour.return_base_id, tour.final_pickup_supplier_id, via_base_id=tour.navette_via_base_id)
 
     # Charger les noms des PDV et bases / Load PDV and base names
     pdv_ids = list({s.pdv_id for s in tour.stops})
@@ -3839,6 +3919,8 @@ async def get_tour_cost_breakdown(
     base = await db.get(BaseLogistics, tour.base_id)
     ret_base = await db.get(BaseLogistics, tour.return_base_id) if tour.return_base_id else base
     base_names = {tour.base_id: base, return_base_of(tour): ret_base}
+    if tour.navette_via_base_id:
+        base_names[tour.navette_via_base_id] = await db.get(BaseLogistics, tour.navette_via_base_id)
     fin_sup = (
         await db.get(Supplier, tour.final_pickup_supplier_id)
         if tour.final_pickup_supplier_id else None
@@ -4041,6 +4123,7 @@ async def recalculate_tour_costs(
             own_trailer=bool(getattr(tour, "vehicle_id", None)),
             return_base_id=tour.return_base_id,
             final_pickup_supplier_id=tour.final_pickup_supplier_id,
+            via_base_id=tour.navette_via_base_id,
         )
         if old_cost != new_cost:
             tour.total_cost = new_cost
@@ -4173,6 +4256,7 @@ async def _recalc_tour_after_stop_change(db: AsyncSession, tour: Tour) -> dict:
                 own_trailer=bool(getattr(tour, "vehicle_id", None)),
                 return_base_id=tour.return_base_id,
                 final_pickup_supplier_id=tour.final_pickup_supplier_id,
+                via_base_id=tour.navette_via_base_id,
             )
             tour.total_cost = round(cost, 2)
             warnings.extend(cost_warnings)
@@ -4737,6 +4821,7 @@ async def change_tours_base(
             own_trailer=bool(getattr(tour, "vehicle_id", None)),
             return_base_id=tour.return_base_id,
             final_pickup_supplier_id=tour.final_pickup_supplier_id,
+            via_base_id=tour.navette_via_base_id,
         )
         tour.total_cost = nouveau_cout
         info["nouveau_cout"] = nouveau_cout

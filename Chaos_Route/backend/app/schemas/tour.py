@@ -90,6 +90,7 @@ class TourBase(BaseModel):
     final_pickup_duration_minutes: int | None = None
     final_pickup_done_at: str | None = None
     navette_arrived_at: str | None = None
+    navette_via_base_id: int | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool = False
@@ -154,6 +155,7 @@ class TourUpdate(BaseModel):
     final_pickup_duration_minutes: int | None = None
     final_pickup_done_at: str | None = None
     navette_arrived_at: str | None = None
+    navette_via_base_id: int | None = None
     delivery_date: str | None = None
     temperature_type: str | None = None
     is_pickup_tour: bool | None = None

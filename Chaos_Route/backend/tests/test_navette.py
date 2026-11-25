@@ -331,3 +331,52 @@ async def test_123_la_navette_compte_son_trajet_et_son_temps_sur_place(client, d
     assert tour.return_time is not None and tour.return_time > "10:00"   # 60 min + temps sur place
     assert (tour.total_duration_minutes or 0) > 60
     assert float(tour.total_km or 0) == 80
+
+
+@pytest.mark.asyncio
+async def test_123_navette_aller_retour(client, db_session, decor):
+    """#123 (suite) — Trazegnies -> Villers -> Trazegnies : une seule navette
+    compte l'aller, le temps sur place et le retour ; la marchandise est
+    déposée à Villers."""
+    from app.models.distance_matrix import DistanceMatrix
+    from app.models.tour import Tour
+    from app.models.volume import Volume
+
+    traz_id, vil_id = decor["traz"].id, decor["villers"].id
+    for o, d in ((traz_id, vil_id), (vil_id, traz_id)):
+        db_session.add(DistanceMatrix(origin_type="BASE", origin_id=o, destination_type="BASE",
+                                      destination_id=d, distance_km=80, duration_minutes=60))
+    await db_session.commit()
+    vol_ids = [v.id for v in decor["volumes"][:2]]
+
+    resp = await _creer(client, decor, departure_time="09:00", round_trip=True)
+    assert resp.status_code == 201, resp.text
+    tid = resp.json()["id"]
+    tour = await db_session.get(Tour, tid)
+    await db_session.refresh(tour)
+    assert tour.return_base_id is None and tour.navette_via_base_id == vil_id
+    assert float(tour.total_km or 0) == 160
+    assert (tour.total_duration_minutes or 0) > 120     # aller + retour + temps sur place
+
+    resp = await client.post(f"/api/tours/{tid}/navette/arrive", json={})
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    vols = (await db_session.execute(select(Volume).where(Volume.id.in_(vol_ids)))).scalars().all()
+    assert {v.base_origin_id for v in vols} == {vil_id}
+
+
+@pytest.mark.asyncio
+async def test_89_duree_estimee_d_une_tournee_non_ordonnancee(client, db_session, decor):
+    """#89 — Sans heure de départ, la tournée n'a pas de durée : la feuille de
+    travail reçoit une estimation (trajets + temps sur place)."""
+    from app.models.distance_matrix import DistanceMatrix
+
+    traz_id, vil_id = decor["traz"].id, decor["villers"].id
+    db_session.add(DistanceMatrix(origin_type="BASE", origin_id=traz_id, destination_type="BASE",
+                                  destination_id=vil_id, distance_km=80, duration_minutes=60))
+    await db_session.commit()
+    resp = await _creer(client, decor)          # pas d'heure de départ
+    tid = resp.json()["id"]
+    r = await client.get("/api/tours/estimated-durations", params={"date": DATE})
+    assert r.status_code == 200, r.text
+    assert r.json()[str(tid)] > 60

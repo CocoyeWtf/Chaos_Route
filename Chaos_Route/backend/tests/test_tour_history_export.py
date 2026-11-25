@@ -16,7 +16,7 @@ EXPECTED_HEADERS = [
     "Code", "Nature", "Date", "Base", "Véhicule", "Transporteur", "Arrêts",
     "EQC", "Km", "Coût (€)", "Statut", "Départ prévu", "Priorité",
     "Retour prévu", "Chauffeur", "Arrivée chauffeur", "Fin chargement",
-    "Top départ", "Sortie barrière", "Retour barrière",
+    "Top départ", "Sortie barrière", "Retour barrière", "PDV",
 ]
 
 
@@ -157,3 +157,22 @@ async def test_tour_history_export_no_contract_and_region_filter(client, db_sess
     # (openpyxl relit une cellule vide comme None au round-trip)
     r2 = next(r for r in wb["Historique tours"].iter_rows(min_row=2, values_only=True) if r[0].startswith("H2-"))
     assert r2[4] in (None, "") and r2[5] in (None, "")
+
+
+@pytest.mark.asyncio
+async def test_117_l_export_ne_prend_que_les_tournees_filtrees(client, db_session, test_region):
+    """#117 — Avec un filtre à l'écran, l'export ne porte que les tournées affichées."""
+    base = await _make_base(db_session, test_region)
+    t1 = await _make_tour(db_session, base, code=f"F1-{uuid.uuid4().hex[:4]}", date="2026-10-19",
+                          n_stops=1, region=test_region)
+    t1_id, t1_code = t1.id, t1.code
+    t2 = await _make_tour(db_session, base, code=f"F2-{uuid.uuid4().hex[:4]}", date="2026-10-19",
+                          n_stops=1, region=test_region)
+    t2_code = t2.code
+    resp = await client.post("/api/exports/tour-history", json={"tour_ids": [t1_id]})
+    assert resp.status_code == 200, resp.text
+    ws = load_workbook(io.BytesIO(resp.content)).active
+    codes = [ws.cell(r, 1).value for r in range(2, ws.max_row + 1)]
+    assert codes == [t1_code]
+    assert t2_code not in codes
+    assert ws.cell(2, len(EXPECTED_HEADERS)).value  # colonne PDV remplie

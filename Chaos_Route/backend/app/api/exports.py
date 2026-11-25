@@ -3,7 +3,8 @@
 from datetime import date as date_type, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from sqlalchemy import select, and_
@@ -242,6 +243,43 @@ async def export_tour_history(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("tour-history", "read")),
 ):
+    """Export Excel de l'historique des tours, sans filtre d'écran (#17)."""
+    return await _export_tour_history(db, user, region_id, base_id, date_from, date_to, None)
+
+
+class TourHistoryExportRequest(BaseModel):
+    """#117 — Exporter exactement ce que l'écran affiche après filtres."""
+    tour_ids: list[int] | None = None
+    region_id: int | None = None
+
+
+@router.post("/tour-history")
+async def export_tour_history_filtered(
+    data: TourHistoryExportRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("tour-history", "read")),
+):
+    """Export de l'historique restreint aux tournées filtrées à l'écran (#117).
+
+    Gaetan : « si on choisit un PDV, exemple 95004, le 19/10, il doit faire
+    l'export sur cette date et ce PDV. Si pas de filtre, l'export est total. »
+    Les filtres de l'écran (colonnes, recherche) sont faits dans le navigateur :
+    il envoie donc la liste des tournées retenues, POST parce qu'elle peut être
+    longue. Le périmètre régional de l'utilisateur s'applique toujours. /
+    The screen sends the filtered tour ids; user scope still applies.
+    """
+    return await _export_tour_history(db, user, data.region_id, None, None, None, data.tour_ids)
+
+
+async def _export_tour_history(
+    db: AsyncSession,
+    user: User,
+    region_id: int | None,
+    base_id: int | None,
+    date_from: str | None,
+    date_to: str | None,
+    tour_ids: list[int] | None,
+):
     """Export Excel de l'historique des tours (ticket #17, phase 1 — manuel).
 
     Reprend les colonnes complètes de la page « Historique des tours ». Une ligne
@@ -262,6 +300,8 @@ async def export_tour_history(
         query = query.where(Tour.date >= date_from)
     if date_to is not None:
         query = query.where(Tour.date <= date_to)
+    if tour_ids is not None:
+        query = query.where(Tour.id.in_(tour_ids))
 
     # Périmètre région : filtre demandé + périmètre de l'utilisateur /
     # Region scope: requested filter + user's own scope
@@ -281,12 +321,16 @@ async def export_tour_history(
 
     query = query.order_by(Tour.date.desc(), Tour.id.desc())
     tours = list((await db.execute(query)).scalars().all())
+    ids_pdv = {st.pdv_id for t in tours for st in t.stops}
+    pdv_codes = {
+        p.id: p.code for p in (await db.execute(select(PDV).where(PDV.id.in_(ids_pdv)))).scalars().all()
+    } if ids_pdv else {}
 
     headers = [
         "Code", "Nature", "Date", "Base", "Véhicule", "Transporteur", "Arrêts",
         "EQC", "Km", "Coût (€)", "Statut", "Départ prévu", "Priorité",
         "Retour prévu", "Chauffeur", "Arrivée chauffeur", "Fin chargement",
-        "Top départ", "Sortie barrière", "Retour barrière",
+        "Top départ", "Sortie barrière", "Retour barrière", "PDV",
     ]
 
     wb = Workbook()
@@ -327,6 +371,9 @@ async def export_tour_history(
             _dt_local(tour.departure_signal_time),
             _dt_local(tour.barrier_exit_time),
             _dt_local(tour.barrier_entry_time),
+            # #117 : les PDV livrés, dans l'ordre, comme la colonne de l'écran
+            " ".join(pdv_codes.get(st.pdv_id, f"#{st.pdv_id}")
+                     for st in sorted(tour.stops, key=lambda x: x.sequence_order)),
         ])
 
     # En-tête en gras + volet figé / Bold header + freeze pane
@@ -339,8 +386,10 @@ async def export_tour_history(
     content.seek(0)
     today = datetime.now().strftime("%Y-%m-%d")
     filename = f"historique-tours_{today}.xlsx"
-    return StreamingResponse(
-        content,
+    # Response (pas StreamingResponse) : en POST (#117), Starlette refuse de
+    # streamer derrière le middleware qui a déjà lu le corps de la requête.
+    return Response(
+        content.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -464,7 +513,12 @@ async def export_postier_planning(
     for tour in tours:
         base_disp = _base_disp(tour.base)
         gel = "O" if (tour.temperature_type and "GEL" in tour.temperature_type) else "N"
-        trac = tour.tractor.code if tour.tractor else ""
+        # #114 (suite, Gaetan) : « le code court est égal au tracteur des
+        # tractionnaires » — il se saisit dans la case « Code » du contrat
+        # (ex. 123 pour l'Infolog 08000123) et sort dans « Trac » ; le
+        # chauffeur propre garde son tracteur du parc. / Carrier short code
+        # goes to the Trac column; own drivers keep their tractor.
+        trac = tour.tractor.code if tour.tractor else (tour.contract.code if tour.contract else "")
         # #114 — Le contrat transporteur n'est PAS une semi : c'est le moyen
         # presté, donc le « chauffeur » au sens de la feuille ERT. Son
         # `vehicle_code` porte d'ailleurs le code long Infolog (08000123) dans
@@ -474,7 +528,11 @@ async def export_postier_planning(
         # semi (véhicule du parc ou n° de semi saisi par le postier). /
         # The contract is the driver line, not the trailer.
         semi = tour.vehicle.code if tour.vehicle else (tour.trailer_number or "")
-        chauffeur = tour.driver_name or (tour.contract.code if tour.contract else "")
+        # « Le nom du chauffeur sera le nom du véhicule » du contrat
+        # (« Baeskens 02 »), à défaut d'un nom saisi. / Contract vehicle name.
+        chauffeur = tour.driver_name or (
+            (tour.contract.vehicle_name or tour.contract.code) if tour.contract else ""
+        )
         # Ordre = priorité d'ordonnancement saisie par le planificateur (aide
         # opérationnelle). Vide si non saisie : ne PAS y mettre un rang, qui se
         # lirait comme une priorité (#78). / Order = planner-entered priority;

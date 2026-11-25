@@ -256,13 +256,45 @@ async def list_tickets(
         query = query.where(Ticket.ticket_type == ticket_type)
 
     result = await db.execute(query)
+    rows = result.all()
+
+    # Dernier message humain de chaque ticket (les événements système — statut,
+    # photo jointe — ne comptent pas comme une réponse). / Last human message.
+    last_msg: dict[int, TicketComment] = {}
+    msgs = await db.execute(
+        select(TicketComment)
+        .where(TicketComment.is_system == False)  # noqa: E712
+        .order_by(TicketComment.ticket_id, TicketComment.created_at)
+    )
+    for c in msgs.scalars().all():
+        last_msg[c.ticket_id] = c
+
     items: list[TicketListItem] = []
-    for ticket, cnt, pcnt in result.all():
+    for ticket, cnt, pcnt in rows:
         item = TicketListItem.model_validate(ticket)
         item.comment_count = int(cnt or 0)
         item.photo_count = int(pcnt or 0)
+        item.waiting_on = _waiting_on(ticket, last_msg.get(ticket.id))
+        if ticket.id in last_msg:
+            item.last_message_at = last_msg[ticket.id].created_at
+            item.last_message_by = last_msg[ticket.id].user_name
         items.append(item)
     return items
+
+
+def _waiting_on(ticket: Ticket, last: TicketComment | None) -> str | None:
+    """Qui doit agir sur ce ticket ? / Whose turn is it?
+
+    On regarde l'auteur du dernier message, pas ses droits : un utilisateur
+    peut gérer les tickets et en ouvrir lui-même. Si quelqu'un d'autre que
+    l'auteur a écrit en dernier, la balle est chez l'auteur (répondre à une
+    question, ou confirmer qu'un correctif convient). / Last writer decides.
+    """
+    if ticket.status in (TicketStatus.CLOSED, TicketStatus.REJECTED):
+        return None
+    if last is None or last.user_id == ticket.created_by_user_id:
+        return "SUPPORT"
+    return "USER"
 
 
 @router.get("/{ticket_id}", response_model=TicketDetail)

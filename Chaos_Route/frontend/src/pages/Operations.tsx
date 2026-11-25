@@ -1703,7 +1703,9 @@ function TourRow({
                   onAdd={(pdvId, eqpCount) => onAddStop(tour.id, pdvId, eqpCount)}
                 />
               )}
-              {canReassign && !tour.departure_signal_time && tour.departure_time && (
+              {/* #115 : le top départ = papiers faits, pas camion parti. Le
+                  chauffeur se change jusqu'à la sortie de barrière. */}
+              {canReassign && !tour.barrier_exit_time && !['IN_PROGRESS', 'RETURNING', 'COMPLETED'].includes(tour.status) && tour.departure_time && (
                 <ReassignInline tour={tour} onDone={onRefresh} />
               )}
               {/* Supprimer la tournée (#37) : sans ce bouton, retirer les PDV un

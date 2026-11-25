@@ -242,6 +242,8 @@ export interface Tour {
   pooled?: boolean
   /* Horodatage d'arrivee d'une navette inter-bases (#43). */
   navette_arrived_at?: string | null
+  /* Navette aller-retour (#123) : base desservie avant le retour au départ */
+  navette_via_base_id?: number | null
   trailer_ready_time?: string
   /* Heure de mise a quai du ZUR, jalon distinct de la semi (#45, #46). */
   zur_ready_time?: string
@@ -448,6 +450,10 @@ export interface Ticket {
   updated_at?: string | null
   comment_count?: number
   photo_count?: number
+  /* Qui doit agir : 'USER' = on attend l'auteur, 'SUPPORT' = à traiter */
+  waiting_on?: 'USER' | 'SUPPORT' | null
+  last_message_at?: string | null
+  last_message_by?: string | null
   comments?: TicketComment[]
   photos?: TicketPhoto[]
 }

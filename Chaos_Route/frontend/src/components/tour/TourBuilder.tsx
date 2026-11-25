@@ -57,6 +57,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const [navetteVolumeIds, setNavetteVolumeIds] = useState<Set<number>>(new Set())
   const [navetteContractId, setNavetteContractId] = useState<number | null>(null)
   const [navetteDepartureTime, setNavetteDepartureTime] = useState('')
+  /* #123 : la navette revient sur sa base de départ après avoir déposé */
+  const [navetteRoundTrip, setNavetteRoundTrip] = useState(false)
   // Commentaire libre (mouvement + transfert) / Free comment (movement + transfer)
   const [movementComment, setMovementComment] = useState('')
   // Enlèvement dédié : fournisseur (distancier), chauffeur PARC (base) + créneau
@@ -1021,6 +1023,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
           vehicle_type: selectedVehicleType,
           contract_id: navetteContractId,
           departure_time: navetteDepartureTime || null,
+          round_trip: navetteRoundTrip,
           temperature_type: selectedTemperatureType,
           remarks: movementComment || null,
         })
@@ -1029,6 +1032,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
         setNavetteVolumeIds(new Set())
         setNavetteContractId(null)
         setNavetteDepartureTime('')
+        setNavetteRoundTrip(false)
         setMovementComment('')
         setSelectedVehicleType(null)
         setCapacityEqp(0)
@@ -1478,6 +1482,13 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                     style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   />
                 </div>
+                {/* #123 : aller-retour, sans construire une seconde navette */}
+                <label className="flex items-center gap-2 self-end pb-2 cursor-pointer text-xs font-medium"
+                  style={{ color: navetteRoundTrip ? 'var(--color-primary)' : 'var(--text-secondary)' }}
+                  title="La navette dépose à la base d'arrivée puis revient à sa base de départ (trajet retour compté dans l'horaire, les km et le coût)">
+                  <input type="checkbox" checked={navetteRoundTrip} onChange={(e) => setNavetteRoundTrip(e.target.checked)} />
+                  Aller-retour (revient à la base de départ)
+                </label>
               </>
             ) : (
               <div className="flex flex-col gap-1">
@@ -1888,6 +1899,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                         temperatureType={selectedTemperatureType}
                         isPickupTour={tourMode === 'pickup'}
                         baseId={effectiveBaseId}
+                        sendToPool={sendToPool}
+                        onSendToPoolChange={setSendToPool}
                       />
                       {saving && (
                         <p className="text-xs text-center" style={{ color: 'var(--color-primary)' }}>
@@ -2017,6 +2030,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                             temperatureType={selectedTemperatureType}
                             isPickupTour={tourMode === 'pickup'}
                             baseId={effectiveBaseId}
+                            sendToPool={sendToPool}
+                            onSendToPoolChange={setSendToPool}
                           />
                           {saving && (
                             <p className="text-xs text-center" style={{ color: 'var(--color-primary)' }}>

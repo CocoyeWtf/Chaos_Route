@@ -24,6 +24,44 @@ function StatusBadge({ status }: { status: TicketStatus }) {
   )
 }
 
+/* Qui doit agir sur le ticket ? Le serveur le donne pour la liste ; pour le
+   détail on applique la même règle au fil : si quelqu'un d'autre que l'auteur
+   a écrit en dernier, on attend l'auteur (répondre ou confirmer). /
+   Whose turn: same rule as the server, applied to the thread. */
+function waitingOn(t: Ticket): 'USER' | 'SUPPORT' | null {
+  if (t.status === 'CLOSED' || t.status === 'REJECTED') return null
+  if (t.comments) {
+    const human = t.comments.filter((c) => !c.is_system)
+    const last = human[human.length - 1]
+    return !last || last.user_id === t.created_by_user_id ? 'SUPPORT' : 'USER'
+  }
+  return t.waiting_on ?? null
+}
+
+function WaitingBadge({ t }: { t: Ticket }) {
+  const w = waitingOn(t)
+  if (w === 'USER') {
+    const who = t.created_by_name || "l'auteur"
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold shrink-0"
+        style={{ backgroundColor: '#f59e0b22', color: '#d97706' }}
+        title={t.status === 'RESOLVED' ? `Correctif livré : ${who} doit confirmer` : `Une question attend la réponse de ${who}`}>
+        ⏳ {t.status === 'RESOLVED' ? 'À confirmer' : 'Attente réponse'} · {who}
+      </span>
+    )
+  }
+  if (w === 'SUPPORT' && (t.comment_count ?? t.comments?.length ?? 0) > 0) {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold shrink-0"
+        style={{ backgroundColor: '#3b82f622', color: '#2563eb' }}
+        title="L'auteur a répondu : à traiter">
+        💬 Réponse reçue
+      </span>
+    )
+  }
+  return null
+}
+
 function fmt(d?: string | null): string {
   if (!d) return ''
   try { return new Date(d).toLocaleString('fr-BE', { dateStyle: 'short', timeStyle: 'short' }) } catch { return d }
@@ -35,6 +73,7 @@ export default function Tickets() {
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState<TicketStatus | 'ALL'>('ALL')
   const [typeFilter, setTypeFilter] = useState<TicketType | 'ALL'>('ALL')
+  const [waitFilter, setWaitFilter] = useState<'ALL' | 'USER' | 'REPLIED'>('ALL')
   const [search, setSearch] = useState('')
 
   const [selected, setSelected] = useState<Ticket | null>(null)
@@ -96,9 +135,17 @@ export default function Tickets() {
     return list.filter((t) =>
       (statusFilter === 'ALL' || t.status === statusFilter) &&
       (typeFilter === 'ALL' || t.ticket_type === typeFilter) &&
+      (waitFilter === 'ALL'
+        || (waitFilter === 'USER' && t.waiting_on === 'USER')
+        || (waitFilter === 'REPLIED' && t.waiting_on === 'SUPPORT' && (t.comment_count ?? 0) > 0)) &&
       (!q || t.title.toLowerCase().includes(q) || (t.created_by_name ?? '').toLowerCase().includes(q) || String(t.id) === q)
     )
-  }, [list, statusFilter, typeFilter, search])
+  }, [list, statusFilter, typeFilter, waitFilter, search])
+
+  const waitCounts = useMemo(() => ({
+    user: list.filter((t) => t.waiting_on === 'USER').length,
+    replied: list.filter((t) => t.waiting_on === 'SUPPORT' && (t.comment_count ?? 0) > 0).length,
+  }), [list])
 
   const counts = useMemo(() => {
     const m: Record<string, number> = {}
@@ -312,6 +359,19 @@ export default function Tickets() {
           <option value="ALL">Tous types</option>
           {(['BUG', 'FEATURE', 'QUESTION', 'OTHER'] as TicketType[]).map((t) => <option key={t} value={t}>{TICKET_TYPE_LABELS[t]}</option>)}
         </select>
+        {/* Qui doit agir : on attend l'utilisateur, ou il a répondu */}
+        <button onClick={() => setWaitFilter(waitFilter === 'USER' ? 'ALL' : 'USER')}
+          className="rounded-lg border px-3 py-2 text-xs font-semibold"
+          style={{ borderColor: '#d97706', color: '#d97706', backgroundColor: waitFilter === 'USER' ? '#f59e0b22' : 'var(--bg-primary)' }}
+          title="Tickets où l'on attend une réponse ou une confirmation de l'auteur">
+          ⏳ Attente utilisateur ({waitCounts.user})
+        </button>
+        <button onClick={() => setWaitFilter(waitFilter === 'REPLIED' ? 'ALL' : 'REPLIED')}
+          className="rounded-lg border px-3 py-2 text-xs font-semibold"
+          style={{ borderColor: '#2563eb', color: '#2563eb', backgroundColor: waitFilter === 'REPLIED' ? '#3b82f622' : 'var(--bg-primary)' }}
+          title="Tickets où l'auteur a répondu en dernier : à traiter">
+          💬 Réponse reçue ({waitCounts.replied})
+        </button>
       </div>
 
       {/* Liste */}
@@ -332,6 +392,7 @@ export default function Tickets() {
               {!!t.comment_count && <span className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>💬 {t.comment_count}</span>}
               {!!t.photo_count && <span className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>📎 {t.photo_count}</span>}
               <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0" style={{ color: 'var(--text-muted)' }}>{TICKET_PRIORITY_LABELS[t.priority]}</span>
+              <WaitingBadge t={t} />
               <StatusBadge status={t.status} />
             </button>
           ))}
@@ -350,6 +411,7 @@ export default function Tickets() {
                   <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>#{selected.id}</span>
                   <span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>{TICKET_TYPE_LABELS[selected.ticket_type]}</span>
                   <StatusBadge status={selected.status} />
+                  <WaitingBadge t={selected} />
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {canEdit && !editing && (

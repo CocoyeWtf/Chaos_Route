@@ -123,6 +123,9 @@ export default function DriverWorksheet() {
 
   /* Tournées du jour / Day's tours */
   const [tours, setTours] = useState<Tour[]>([])
+  /* #89 : durée estimée des tournées pas encore ordonnancées (sans heure de
+     départ, le serveur n'a pas encore calculé leur durée) / Estimated durations */
+  const [estimated, setEstimated] = useState<Record<number, number>>({})
   const [loadingTours, setLoadingTours] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -147,8 +150,15 @@ export default function DriverWorksheet() {
     try {
       /* limit explicite : l'endpoint plafonne à 200 par défaut (cf. TourScheduler). /
          Explicit limit: the endpoint defaults to 200. */
-      const { data } = await api.get<Tour[]>('/tours/', { params: { date: selectedDate, limit: 2000 } })
-      if (seq === loadSeq.current) setTours(data)
+      const [{ data }, est] = await Promise.all([
+        api.get<Tour[]>('/tours/', { params: { date: selectedDate, limit: 2000 } }),
+        api.get<Record<number, number>>('/tours/estimated-durations', { params: { date: selectedDate } })
+          .catch(() => ({ data: {} as Record<number, number> })),
+      ])
+      if (seq === loadSeq.current) {
+        setTours(data)
+        setEstimated(est.data)
+      }
     } catch (e) {
       if (seq === loadSeq.current) {
         setTours([])
@@ -220,12 +230,12 @@ export default function DriverWorksheet() {
       const cur = m.get(name) ?? { tours: 0, km: 0, minutes: 0, tractor: null }
       cur.tours += 1
       cur.km += t.total_km ?? 0
-      cur.minutes += t.total_duration_minutes ?? 0
+      cur.minutes += t.total_duration_minutes ?? estimated[t.id] ?? 0
       if (!cur.tractor && t.tractor_id) cur.tractor = vehicleMap.get(t.tractor_id)?.code ?? null
       m.set(name, cur)
     }
     return m
-  }, [tours, effectiveDriver, vehicleMap])
+  }, [tours, effectiveDriver, vehicleMap, estimated])
 
   const driverByName = useMemo(
     () => new Map(baseDrivers.map((d) => [driverDisplayName(d), d])),
@@ -538,7 +548,8 @@ export default function DriverWorksheet() {
                   const rowBg = isDrop ? 'rgba(249,115,22,0.18)' : 'var(--bg-secondary)'
                   const contract = t.contract_id ? contractMap.get(t.contract_id) : undefined
                   const depBase = baseMap.get(t.base_id)
-                  const arrBase = baseMap.get(t.return_base_id ?? t.base_id)
+                  /* Navette aller-retour (#123) : on affiche la base desservie */
+                  const arrBase = baseMap.get(t.navette_via_base_id ?? t.return_base_id ?? t.base_id)
                   const stops = [...(t.stops ?? [])].sort((a, b) => a.sequence_order - b.sequence_order)
                   const over = t.capacity_eqp != null && (t.total_eqp ?? 0) > t.capacity_eqp
                   const semi = t.trailer_number
@@ -568,7 +579,8 @@ export default function DriverWorksheet() {
                           onClear={() => setPendingFor(t, { driver_name: null, driver_code_infolog: null })}
                         />
                       </td>
-                      <td className={td} style={cellBorder}>{t.tractor_id ? (vehicleMap.get(t.tractor_id)?.code ?? `#${t.tractor_id}`) : ''}</td>
+                      {/* #114 : presté = code court du contrat (« 123 ») dans Trac */}
+                      <td className={td} style={cellBorder}>{t.tractor_id ? (vehicleMap.get(t.tractor_id)?.code ?? `#${t.tractor_id}`) : (contract?.code ?? '')}</td>
                       <td className={td} style={cellBorder}>{semi}</td>
                       <td className={td} style={cellBorder} title={depBase?.name}>{depBase?.code ?? ''}</td>
                       <td className={td} style={cellBorder} title={arrBase?.name}>{arrBase?.code ?? ''}</td>
@@ -597,7 +609,11 @@ export default function DriverWorksheet() {
                         {fmtEqc(t.total_eqp ?? 0)}{t.capacity_eqp != null && <span className="opacity-60 font-normal">/{t.capacity_eqp}</span>}
                       </td>
                       <td className={`${td} text-right`} style={cellBorder}>{fmtKm(t.total_km)}</td>
-                      <td className={`${td} text-right`} style={cellBorder}>{fmtHM(t.total_duration_minutes)}</td>
+                      <td className={`${td} text-right`} style={cellBorder}
+                        title={t.total_duration_minutes == null && estimated[t.id] != null ? 'Estimation : tournée pas encore ordonnancée' : undefined}>
+                        {t.total_duration_minutes != null ? fmtHM(t.total_duration_minutes)
+                          : estimated[t.id] != null ? <span style={{ color: 'var(--text-muted)' }}>~{fmtHM(estimated[t.id])}</span> : '—'}
+                      </td>
                       <td className={`${td} text-right`} style={cellBorder}>{t.return_time || '—'}</td>
                       <td className={`${td} text-right`} style={cellBorder}>{fmtCost(t.total_cost)}</td>
                     </tr>

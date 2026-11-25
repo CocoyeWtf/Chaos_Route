@@ -69,6 +69,16 @@ def return_base_of(tour: "Tour") -> int:
     return tour.return_base_id or tour.base_id
 
 
+def navette_destination_of(tour: "Tour") -> int:
+    """Base où la navette DÉPOSE sa marchandise (#43, #123).
+
+    Navette simple : elle s'y termine (`return_base_id`). Navette aller-retour :
+    elle y passe (`navette_via_base_id`) puis revient sur sa base de départ.
+    / Where the navette unloads: the via base of a round trip, else its end.
+    """
+    return tour.navette_via_base_id or return_base_of(tour)
+
+
 class Tour(Base, TenantMixin):
     __tablename__ = "tours"
     __table_args__ = (
@@ -143,6 +153,10 @@ class Tour(Base, TenantMixin):
     # que sur la base d'arrivee. On ne bascule pas a la construction : une
     # navette qui ne part jamais ne doit pas avoir deplace de marchandise.
     navette_arrived_at: Mapped[str | None] = mapped_column(String(32))
+    # Navette aller-retour (#123) : base desservie avant de revenir. Gaetan :
+    # « la navette part de Gosselies jusqu'à Villers mais revient à Gosselies ».
+    # Vide = navette simple, qui se termine sur `return_base_id`.
+    navette_via_base_id: Mapped[int | None] = mapped_column(ForeignKey("bases_logistics.id"), nullable=True)
     delivery_date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD — date de livraison
     temperature_type: Mapped[str | None] = mapped_column(String(10))  # SEC|FRAIS|GEL|BI_TEMP|TRI_TEMP
     is_pickup_tour: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -54,6 +54,10 @@ interface DataTableProps<T extends { id: number }> {
   searchKeys?: (keyof T)[]
   /* Texte supplémentaire couvert par la recherche globale (#117) */
   searchText?: (row: T) => string
+  /* Lignes retenues par les filtres et la recherche (#117) : `isFiltered` est
+     vrai dès qu'un filtre ou une recherche est actif. Le parent s'en sert pour
+     exporter ce qui est affiché. / Rows left after filters, for exports. */
+  onFilteredChange?: (rows: T[], isFiltered: boolean) => void
 }
 
 export function DataTable<T extends { id: number }>({
@@ -73,6 +77,7 @@ export function DataTable<T extends { id: number }>({
   searchable = true,
   searchKeys = [],
   searchText,
+  onFilteredChange,
 }: DataTableProps<T>) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
@@ -239,6 +244,10 @@ export function DataTable<T extends { id: number }>({
 
     return result
   }, [data, search, searchKeys, searchText, colFilters, columns, filterTextOf])
+
+  useEffect(() => {
+    onFilteredChange?.(filtered, filtered !== data)
+  }, [filtered, data, onFilteredChange])
 
   /* Totaux de colonnes (#91) / Column totals */
   const columnsWithTotal = useMemo(

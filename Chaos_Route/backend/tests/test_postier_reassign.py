@@ -35,11 +35,23 @@ async def test_reassign_keeps_time_and_changes_means(client, db_session, test_re
 
 
 @pytest.mark.asyncio
-async def test_reassign_refused_after_departure(client, db_session, test_region):
+async def test_reassign_allowed_after_departure_signal(client, db_session, test_region):
+    """#115 (suite) : le top départ = papiers faits, pas camion parti."""
     from app.models.tour import Tour
     tour_id, (_, tr2) = await _planned_tour(client, db_session, test_region)
     tour = await db_session.get(Tour, tour_id)
     tour.departure_signal_time = "2026-06-25T06:05"
+    await db_session.commit()
+    r = await client.put(f"/api/tours/{tour_id}/reassign", json={"tractor_id": tr2})
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_reassign_refused_after_barrier_exit(client, db_session, test_region):
+    from app.models.tour import Tour
+    tour_id, (_, tr2) = await _planned_tour(client, db_session, test_region)
+    tour = await db_session.get(Tour, tour_id)
+    tour.barrier_exit_time = "2026-06-25T06:20"
     await db_session.commit()
     r = await client.put(f"/api/tours/{tour_id}/reassign", json={"tractor_id": tr2})
     assert r.status_code == 409

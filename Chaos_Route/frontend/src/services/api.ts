@@ -171,11 +171,15 @@ export async function downloadExport(entity: string, format: 'csv' | 'xlsx' = 'x
 
 /* Télécharger l'export Excel de l'historique des tours (ticket #17) /
    Download the tour-history Excel export. */
-export async function downloadTourHistory(regionId?: number | null): Promise<void> {
-  const response = await api.get('/exports/tour-history', {
-    params: regionId ? { region_id: regionId } : undefined,
-    responseType: 'blob',
-  })
+export async function downloadTourHistory(regionId?: number | null, tourIds?: number[] | null): Promise<void> {
+  /* #117 : avec des filtres actifs, on n'exporte que les tournées affichées
+     (POST : la liste peut être longue). Sans filtre, l'export est total. */
+  const response = tourIds
+    ? await api.post('/exports/tour-history', { tour_ids: tourIds, region_id: regionId ?? null }, { responseType: 'blob' })
+    : await api.get('/exports/tour-history', {
+      params: regionId ? { region_id: regionId } : undefined,
+      responseType: 'blob',
+    })
   const today = new Date().toISOString().slice(0, 10)
   const blob = new Blob([response.data])
   const url = window.URL.createObjectURL(blob)

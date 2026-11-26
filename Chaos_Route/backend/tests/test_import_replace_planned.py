@@ -135,3 +135,25 @@ async def test_87_autre_base_deja_chargee_demande_confirmation(client, db_sessio
     assert body["other_bases"][0]["count"] == 1
     n = (await db_session.execute(select(Volume).where(Volume.base_origin_id == autre_id))).scalars().all()
     assert n == []
+
+
+@pytest.mark.asyncio
+async def test_87_meme_base_deja_chargee_a_une_autre_heure(client, db_session, test_region):
+    """#87 (suite, Gaetan 26/11) — Réimporter la même base le même jour, à une
+    autre heure de répartition, ne disait rien : le doublon exact compare aussi
+    l'heure. On signale désormais les lignes déjà présentes sur CETTE base."""
+    from app.models.volume import Volume
+
+    r = await _setup(db_session, test_region, planned=False)  # 1 volume, heure non renseignée
+    resp = await client.post(
+        f"/api/imports/volumes?mode=check&dispatch_date={DATE}&dispatch_time=12:15&base_origin_id={r['base']}",
+        files={"file": ("v.csv", _csv(r["pdv_code"]), "text/csv")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "base_warning"
+    assert body["other_bases"] == []
+    assert sum(b["count"] for b in body["same_base"]) == 1
+    assert "1 ligne(s)" in body["message"]
+    n = (await db_session.execute(select(Volume).where(Volume.base_origin_id == r["base"]))).scalars().all()
+    assert len(n) == 1  # rien d'importé sans confirmation

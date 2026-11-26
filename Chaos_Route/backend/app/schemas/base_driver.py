@@ -11,6 +11,7 @@ class BaseDriverCreate(BaseModel):
     status: str = "ACTIVE"
     base_id: int
     work_days: str | None = None   # « LUN,MAR,MER,JEU,VEN » — vide = semaine complète (#33)
+    loan_base_ids: str | None = None  # #89 : sites de prêt « 3|5 » ; vide = partout
     phone: str | None = None
     email: str | None = None
     notes: str | None = None
@@ -24,6 +25,7 @@ class BaseDriverUpdate(BaseModel):
     status: str | None = None
     base_id: int | None = None
     work_days: str | None = None   # « LUN,MAR,MER,JEU,VEN » — vide = semaine complète (#33)
+    loan_base_ids: str | None = None  # #89 : sites de prêt « 3|5 » ; vide = partout
     phone: str | None = None
     email: str | None = None
     notes: str | None = None
@@ -40,6 +42,7 @@ class BaseDriverRead(BaseModel):
     status: str
     base_id: int
     work_days: str | None = None   # « LUN,MAR,MER,JEU,VEN » — vide = semaine complète (#33)
+    loan_base_ids: str | None = None  # #89 : sites de prêt « 3|5 » ; vide = partout
     phone: str | None = None
     email: str | None = None
     notes: str | None = None

@@ -380,3 +380,27 @@ async def test_89_duree_estimee_d_une_tournee_non_ordonnancee(client, db_session
     r = await client.get("/api/tours/estimated-durations", params={"date": DATE})
     assert r.status_code == 200, r.text
     assert r.json()[str(tid)] > 60
+
+
+@pytest.mark.asyncio
+async def test_123_les_eqc_saisis_allongent_le_temps_sur_place(client, db_session, decor):
+    """#123 (suite, Gaetan 26/11) — Sans EQC, le temps sur place se limitait au
+    quai. Une case EQC saisie à la main l'allonge de EQC × temps unitaire
+    (2 min par défaut) : 10 EQC = 20 minutes de plus qu'une navette vide."""
+    from app.models.distance_matrix import DistanceMatrix
+    from app.models.tour import Tour
+
+    db_session.add(DistanceMatrix(origin_type="BASE", origin_id=decor["traz"].id,
+                                  destination_type="BASE", destination_id=decor["villers"].id,
+                                  distance_km=80, duration_minutes=60))
+    await db_session.commit()
+
+    vide = await _creer(client, decor, departure_time="09:00", volume_ids=[])
+    plein = await _creer(client, decor, departure_time="09:00", volume_ids=[], eqp=10)
+    assert vide.status_code == 201 and plein.status_code == 201, plein.text
+    t_vide = await db_session.get(Tour, vide.json()["id"])
+    t_plein = await db_session.get(Tour, plein.json()["id"])
+    await db_session.refresh(t_vide)
+    await db_session.refresh(t_plein)
+    assert float(t_plein.total_eqp) == 10
+    assert t_plein.total_duration_minutes - t_vide.total_duration_minutes == 20

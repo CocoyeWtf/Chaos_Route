@@ -992,7 +992,27 @@ async def import_data(
                         .order_by(BaseLogistics.code)
                     )
                     other_bases = [{"base": f"{c} — {n}", "count": k} for c, n, k in ob_res.all()]
-            if mode == "check" and other_bases and not existing_groups:
+            # #87 (suite, 26/11) — Gaetan : « signaler aussi que X lignes pour la
+            # base 092 sont déjà dans le système ». Le doublon exact compare
+            # aussi l'HEURE de répartition : un second import du même jour à
+            # une autre heure passait donc sans rien dire. On compte ici les
+            # volumes déjà présents sur la MÊME base ce jour-là, toutes heures
+            # confondues. / Same-base volumes already loaded that day, any time.
+            same_base: list[dict] = []
+            if mode == "check" and (dispatch_date or dates_in_file):
+                sb_scope = [Volume.dispatch_date == dispatch_date] if dispatch_date else [Volume.date.in_(list(dates_in_file))]
+                sb_res = await db.execute(
+                    select(BaseLogistics.code, BaseLogistics.name, Volume.dispatch_time, func.count(Volume.id))
+                    .join(BaseLogistics, BaseLogistics.id == Volume.base_origin_id)
+                    .where(*sb_scope, Volume.base_origin_id.in_(list(base_ids_in_file)))
+                    .group_by(BaseLogistics.code, BaseLogistics.name, Volume.dispatch_time)
+                    .order_by(BaseLogistics.code, Volume.dispatch_time)
+                )
+                same_base = [
+                    {"base": f"{c} — {n}", "dispatch_time": t or "", "count": k}
+                    for c, n, t, k in sb_res.all()
+                ]
+            if mode == "check" and (other_bases or same_base) and not existing_groups:
                 imp_res = await db.execute(
                     select(BaseLogistics.code, BaseLogistics.name).where(BaseLogistics.id.in_(list(base_ids_in_file)))
                 )
@@ -1001,12 +1021,20 @@ async def import_data(
                     "status": "base_warning",
                     "importing_base": importing,
                     "other_bases": other_bases,
+                    "same_base": same_base,
                     "new_row_count": len(rows),
-                    "message": (
-                        f"Vous importez sur {importing}, alors que ce jour porte déjà des volumes de : "
-                        + ", ".join(f"{b['base']} ({b['count']})" for b in other_bases)
-                        + ". Vérifiez la base d'origine avant de confirmer."
-                    ),
+                    "message": " ".join(filter(None, [
+                        (
+                            f"Ce jour porte déjà {sum(b['count'] for b in same_base)} ligne(s) de volumes pour "
+                            + ", ".join(sorted({b['base'] for b in same_base}))
+                            + " (répartition de " + ", ".join(b['dispatch_time'] or "heure inconnue" for b in same_base) + ")."
+                        ) if same_base else "",
+                        (
+                            "Ce jour porte déjà des volumes de : "
+                            + ", ".join(f"{b['base']} ({b['count']})" for b in other_bases) + "."
+                        ) if other_bases else "",
+                        "Vérifiez la base d'origine et l'absence de doublon avant de confirmer.",
+                    ])),
                 }
 
             if existing_groups:

@@ -161,6 +161,7 @@ async def calculate_tour_times(
     final_pickup_supplier_id: int | None = None,
     final_pickup_duration_minutes: int | None = None,
     via_base_id: int | None = None,
+    navette_eqp: float | None = None,
 ) -> tuple[list[dict], str, int]:
     """
     Calculer les temps à chaque arrêt / Calculate times at each stop.
@@ -174,6 +175,11 @@ async def calculate_tour_times(
     `final_pickup_supplier_id` : enlèvement fournisseur après le dernier PDV et
     avant le retour base (#74). Le trajet devient PDV → fournisseur → base, et le
     temps sur place s'ajoute. / Final supplier pickup inserted before the return.
+
+    `navette_eqp` : EQC chargés sur une navette (#123, suite du 26/11). Une
+    navette n'a pas d'arrêt PDV : son temps sur place était le seul temps de
+    quai, quel que soit le chargement. Il vaut désormais quai + EQC × temps
+    unitaire de déchargement, comme à un PDV. / EQC on a navette, for on-site time.
 
     Returns: (enriched_stops, return_time, total_duration_minutes)
     """
@@ -242,7 +248,7 @@ async def calculate_tour_times(
         # place, puis retour. / Round-trip navette: out, on site, back.
         aller = await _get_distance(db, "BASE", base_id, "BASE", via_base_id)
         retour = await _get_distance(db, "BASE", via_base_id, "BASE", ret_base_id)
-        on_site = final_pickup_duration_minutes or default_dock
+        on_site = final_pickup_duration_minutes or (default_dock + float(navette_eqp or 0) * default_unload)
         minutes = (aller.duration_minutes if aller else 0) + on_site + (retour.duration_minutes if retour else 0)
         return_time = _format_time(current_time + timedelta(minutes=minutes))
     elif ret_base_id != base_id:
@@ -251,7 +257,7 @@ async def calculate_tour_times(
         # départ 09:00, retour 09:00, et le chauffeur paraissait libre pour
         # une autre tournée. / Navette: base-to-base leg plus time on site.
         leg = await _get_distance(db, "BASE", base_id, "BASE", ret_base_id)
-        on_site = final_pickup_duration_minutes or default_dock
+        on_site = final_pickup_duration_minutes or (default_dock + float(navette_eqp or 0) * default_unload)
         return_dt = current_time + timedelta(minutes=(leg.duration_minutes if leg else 0) + on_site)
         return_time = _format_time(return_dt)
     else:
@@ -654,7 +660,7 @@ async def estimated_durations(
         _, _, minutes = await calculate_tour_times(
             "00:00", stops_data, t.base_id, db, t.return_base_id,
             t.final_pickup_supplier_id, t.final_pickup_duration_minutes,
-            via_base_id=t.navette_via_base_id,
+            via_base_id=t.navette_via_base_id, navette_eqp=float(t.total_eqp or 0),
         )
         out[t.id] = minutes
     return out
@@ -1745,6 +1751,27 @@ async def list_pooled_tours(
         )
 
     tours = (await db.execute(query)).scalars().all()
+
+    # Detail des PDV de chaque tournee (#125) : sans lui, impossible de savoir
+    # quelle tournee du pot sortir pour quel jour. Une seule requete pour tous.
+    pdv_ids = {s.pdv_id for t in tours for s in t.stops}
+    pdvs = {}
+    if pdv_ids:
+        rows = await db.execute(select(PDV.id, PDV.code, PDV.name, PDV.city).where(PDV.id.in_(pdv_ids)))
+        pdvs = {r.id: r for r in rows}
+
+    def _stops_detail(t: Tour) -> list[dict]:
+        out = []
+        for s in sorted(t.stops, key=lambda x: x.sequence_order):
+            p = pdvs.get(s.pdv_id)
+            out.append({
+                "code": p.code if p else None,
+                "name": p.name if p else None,
+                "city": p.city if p else None,
+                "eqp": float(s.eqp_count or 0),
+            })
+        return out
+
     return {
         "count": len(tours),
         "tours": [
@@ -1752,6 +1779,7 @@ async def list_pooled_tours(
                 "id": t.id,
                 "code": t.code,
                 "base_id": t.base_id,
+                "stops": _stops_detail(t),
                 "built_on": t.date,
                 "vehicle_type": t.vehicle_type.value if hasattr(t.vehicle_type, "value") else t.vehicle_type,
                 "temperature_type": t.temperature_type.value if hasattr(t.temperature_type, "value") else t.temperature_type,
@@ -1844,6 +1872,9 @@ class NavetteCreate(BaseModel):
     remarks: str | None = None
     # #123 : la navette revient sur sa base de départ après avoir déposé.
     round_trip: bool = False
+    # #123 (suite) : EQC chargés, saisis à la main quand la navette n'embarque
+    # pas de volumes importés — sert au temps sur place (quai + EQC × unitaire).
+    eqp: float | None = Field(default=None, ge=0, le=200)
 
 
 class NavetteArriveRequest(BaseModel):
@@ -1942,7 +1973,9 @@ async def create_navette(
         departure_time=data.departure_time,
         temperature_type=data.temperature_type,
         remarks=data.remarks,
-        total_eqp=sum(float(v.eqp_count or 0) for v in volumes),
+        # Saisie manuelle prioritaire (#123) : elle décrit ce qui est réellement
+        # chargé ; à défaut, la somme des volumes embarqués.
+        total_eqp=data.eqp if data.eqp else sum(float(v.eqp_count or 0) for v in volumes),
     )
     db.add(tour)
     await db.flush()
@@ -1984,7 +2017,7 @@ async def create_navette(
         if not planifiee:
             _, ret, duree = await calculate_tour_times(
                 data.departure_time, [], data.base_id, db, return_base_id=tour.return_base_id,
-                via_base_id=tour.navette_via_base_id,
+                via_base_id=tour.navette_via_base_id, navette_eqp=float(tour.total_eqp or 0),
             )
             tour.return_time = ret
             tour.total_duration_minutes = duree
@@ -2980,7 +3013,7 @@ async def schedule_tour(
     enriched_stops, return_time, total_duration = await calculate_tour_times(
         data.departure_time, stops_data, tour.base_id, db, tour.return_base_id,
         tour.final_pickup_supplier_id, tour.final_pickup_duration_minutes,
-        via_base_id=tour.navette_via_base_id,
+        via_base_id=tour.navette_via_base_id, navette_eqp=float(tour.total_eqp or 0),
     )
 
     # ── Validation véhicule propre / Own vehicle validation ──────────────────

@@ -60,6 +60,11 @@ class ContractBase(BaseModel):
     trailer_supply: TrailerSupply | None = None
     vehicle_id: int | None = None
     carrier_id: int | None = None
+    # #89 — Site habituel du moyen (feuille de travail) et sites auxquels il
+    # peut être prêté : « 3|5 » ; vide = prêtable partout. Indicatif, jamais
+    # bloquant. / Usual site and sites it may be lent to (indicative).
+    home_base_id: int | None = None
+    loan_base_ids: str | None = None
 
 
 class ContractCreate(ContractBase):
@@ -99,6 +104,8 @@ class ContractUpdate(BaseModel):
     trailer_supply: TrailerSupply | None = None
     vehicle_id: int | None = None
     carrier_id: int | None = None
+    home_base_id: int | None = None
+    loan_base_ids: str | None = None
 
 
 class ContractRead(ContractBase):

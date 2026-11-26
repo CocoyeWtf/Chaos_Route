@@ -59,6 +59,8 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
   const [navetteDepartureTime, setNavetteDepartureTime] = useState('')
   /* #123 : la navette revient sur sa base de départ après avoir déposé */
   const [navetteRoundTrip, setNavetteRoundTrip] = useState(false)
+  /* #123 (suite) : EQC chargés saisis à la main → temps sur place (quai + EQC × unitaire) */
+  const [navetteEqp, setNavetteEqp] = useState('')
   // Commentaire libre (mouvement + transfert) / Free comment (movement + transfer)
   const [movementComment, setMovementComment] = useState('')
   // Enlèvement dédié : fournisseur (distancier), chauffeur PARC (base) + créneau
@@ -1024,6 +1026,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
           contract_id: navetteContractId,
           departure_time: navetteDepartureTime || null,
           round_trip: navetteRoundTrip,
+          eqp: navetteEqp ? Number(navetteEqp) : null,
           temperature_type: selectedTemperatureType,
           remarks: movementComment || null,
         })
@@ -1033,6 +1036,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
         setNavetteContractId(null)
         setNavetteDepartureTime('')
         setNavetteRoundTrip(false)
+        setNavetteEqp('')
         setMovementComment('')
         setSelectedVehicleType(null)
         setCapacityEqp(0)
@@ -1467,7 +1471,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                     style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   >
                     <option value="">-- Contrat --</option>
-                    {contracts.map((c) => (
+                    {[...contracts].sort((a, b) => `${a.code} ${a.transporter_name}`.localeCompare(`${b.code} ${b.transporter_name}`, 'fr', { numeric: true })).map((c) => (
                       <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
                     ))}
                   </select>
@@ -1480,6 +1484,24 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                     onChange={(e) => setNavetteDepartureTime(e.target.value)}
                     className="rounded-lg border px-3 py-2 text-sm"
                     style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  />
+                </div>
+                {/* #123 (suite) : EQC chargés. Sans eux, le temps sur place se
+                    limitait au temps de quai fixe. Vide = somme des volumes
+                    cochés ci-dessous. */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>EQC</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={200}
+                    step={0.5}
+                    value={navetteEqp}
+                    onChange={(e) => setNavetteEqp(e.target.value)}
+                    placeholder={navetteEqpTotal > 0 ? navetteEqpTotal.toFixed(1) : '0'}
+                    className="rounded-lg border px-3 py-2 text-sm w-20"
+                    style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    title="EQC chargés : temps sur place = temps de quai + EQC × temps de déchargement par EQC. Vide = somme des volumes cochés."
                   />
                 </div>
                 {/* #123 : aller-retour, sans construire une seconde navette */}
@@ -1628,7 +1650,7 @@ export function TourBuilder({ selectedDate, selectedBaseId, onDateChange, onBase
                 style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               >
                 <option value="">-- Transporteur --</option>
-                {contracts.map((c) => (
+                {[...contracts].sort((a, b) => `${a.code} ${a.transporter_name}`.localeCompare(`${b.code} ${b.transporter_name}`, 'fr', { numeric: true })).map((c) => (
                   <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
                 ))}
               </select>

@@ -1644,6 +1644,33 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
           </select>
         </div>
 
+        {/* Tout cocher (#109) : coche les tournées AFFICHÉES (filtres de date,
+            activité, base, chauffeur appliqués), pour vider une journée d'un
+            geste. Un second clic décoche tout. / Select all displayed tours. */}
+        {sortedTours.length > 0 && (() => {
+          const allChecked = sortedTours.every((x) => selectedTourIds.has(x.id))
+          const someChecked = !allChecked && sortedTours.some((x) => selectedTourIds.has(x.id))
+          return (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>&nbsp;</label>
+              <label
+                className="flex items-center gap-1.5 px-2 py-2 text-xs rounded-lg border cursor-pointer select-none"
+                style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                title="Cocher toutes les tournées affichées pour cette date"
+              >
+                <input
+                  type="checkbox"
+                  className="accent-orange-500"
+                  checked={allChecked}
+                  ref={(el) => { if (el) el.indeterminate = someChecked }}
+                  onChange={() => setSelectedTourIds(allChecked ? new Set() : new Set(sortedTours.map((x) => x.id)))}
+                />
+                Tout cocher ({sortedTours.length})
+              </label>
+            </div>
+          )
+        })()}
+
         {/* Changement de date groupé (#66) : n'apparaît qu'une fois des tournées
             cochées, pour ne pas encombrer la barre le reste du temps. */}
         {selectedTourIds.size > 0 && (
@@ -2349,15 +2376,34 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                       {(!isScheduled || editingTourId === tour.id) ? (
                         /* --- Non planifié OU en modification : sélecteurs + enregistrer --- */
                         <>
-                          {/* Date livraison */}
-                          <input
-                            type="date"
-                            value={input.deliveryDate}
-                            onChange={(e) => updateInput(tour.id, 'deliveryDate', e.target.value)}
-                            onClick={(e) => e.stopPropagation()}
-                            className="rounded border px-1.5 py-1 text-[11px] w-[120px] shrink-0"
-                            style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                          />
+                          {/* Date livraison. Garde-fou #124 : une livraison à plus
+                              de 7 jours de la répartition est presque toujours une
+                              faute de frappe (année) — et deux tournées d'années
+                              différentes ne se chevauchent jamais, donc aucune
+                              alerte ne sortirait. On la signale en rouge. */}
+                          {(() => {
+                            const gapDays = input.deliveryDate && tour.date
+                              ? Math.abs(Date.parse(input.deliveryDate) - Date.parse(tour.date)) / 86400000
+                              : 0
+                            const suspect = gapDays > 7
+                            return (
+                              <input
+                                type="date"
+                                value={input.deliveryDate}
+                                onChange={(e) => updateInput(tour.id, 'deliveryDate', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="rounded border px-1.5 py-1 text-[11px] w-[120px] shrink-0"
+                                style={{
+                                  backgroundColor: suspect ? 'rgba(239,68,68,0.1)' : 'var(--bg-primary)',
+                                  borderColor: suspect ? 'var(--color-danger)' : 'var(--border-color)',
+                                  color: 'var(--text-primary)',
+                                }}
+                                title={suspect
+                                  ? `Livraison à ${Math.round(gapDays)} jours de la répartition (${tour.date}) — vérifiez l'année.`
+                                  : 'Date de livraison'}
+                              />
+                            )
+                          })()}
 
                           {/* Toggle mode : Presté / Propre / Mixte */}
                           <div className="flex rounded border overflow-hidden text-[10px] shrink-0" style={{ borderColor: 'var(--border-color)' }}>
@@ -2488,9 +2534,14 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
                                 style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', maxWidth: '160px' }}
                               >
                                 <option value="">Tracteur presté</option>
-                                {contracts.map((c) => (
-                                  <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
-                                ))}
+                                {/* Même tri alphabétique que le mode Presté (#52, #95) :
+                                    la liste Mixte avait été oubliée. */}
+                                {[...contracts]
+                                  .sort((a, b) => `${a.code} ${a.transporter_name}`
+                                    .localeCompare(`${b.code} ${b.transporter_name}`, 'fr', { numeric: true }))
+                                  .map((c) => (
+                                    <option key={c.id} value={c.id}>{c.code} — {c.transporter_name}</option>
+                                  ))}
                               </select>
                               <select
                                 value={input.vehicleId ?? ''}

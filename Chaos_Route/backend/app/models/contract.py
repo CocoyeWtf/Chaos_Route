@@ -138,6 +138,11 @@ class Contract(Base, TenantMixin):
     vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id"))
     # Lien vers transporteur / Link to carrier
     carrier_id: Mapped[int | None] = mapped_column(ForeignKey("carriers.id"))
+    # #89 — Feuille de travail : site habituel du moyen, et sites auxquels il
+    # peut être prêté (« 3|5 » ; vide = partout). Indicatif, jamais bloquant :
+    # un chauffeur de Trazegnies fait parfois un tour à Gosselies.
+    home_base_id: Mapped[int | None] = mapped_column(ForeignKey("bases_logistics.id"), nullable=True)
+    loan_base_ids: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # Relations
     region: Mapped["Region"] = relationship(back_populates="contracts")

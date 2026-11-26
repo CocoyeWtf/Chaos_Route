@@ -24,6 +24,8 @@ interface PooledTour {
   stops_count: number
   total_eqp: number
   total_km: number
+  /** Détail des PDV dans l'ordre de passage (#125). */
+  stops?: { code: string | null; name: string | null; city: string | null; eqp: number }[]
 }
 
 interface Props {
@@ -52,9 +54,12 @@ export function PooledToursPanel({ bases, targetDate, onScheduled }: Props) {
   useEffect(() => { charger() }, [charger])
   useEffect(() => { setDate(targetDate) }, [targetDate])
 
-  const baseLabel = (id: number) => {
+  /* Code seul (#125) : « 092 MEA » suffit, le nom complet passe en infobulle
+     et la place gagnée va au détail des PDV. */
+  const baseLabel = (id: number) => bases.find((x) => x.id === id)?.code ?? `#${id}`
+  const baseTitle = (id: number) => {
     const b = bases.find((x) => x.id === id)
-    return b ? `${b.code} — ${b.name}` : `#${id}`
+    return b ? `${b.code} — ${b.name}` : ''
   }
 
   const planifier = async () => {
@@ -100,7 +105,7 @@ export function PooledToursPanel({ bases, targetDate, onScheduled }: Props) {
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.55)' }} onClick={() => setOpen(false)}>
-          <div className="w-full max-w-3xl rounded-xl border flex flex-col"
+          <div className="w-full max-w-5xl rounded-xl border flex flex-col"
             style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', maxHeight: '85vh' }}
             onClick={(e) => e.stopPropagation()}>
 
@@ -157,6 +162,7 @@ export function PooledToursPanel({ bases, targetDate, onScheduled }: Props) {
                       <th className="text-left py-1 w-8" />
                       <th className="text-left py-1">Tournée</th>
                       <th className="text-left py-1">Base</th>
+                      <th className="text-left py-1">PDV (EQC)</th>
                       <th className="text-left py-1">Construite le</th>
                       <th className="text-left py-1">Véhicule</th>
                       <th className="text-right py-1">Arrêts</th>
@@ -177,7 +183,13 @@ export function PooledToursPanel({ bases, targetDate, onScheduled }: Props) {
                             })} />
                         </td>
                         <td className="py-1 font-mono" style={{ color: 'var(--text-primary)' }}>{t.code}</td>
-                        <td className="py-1" style={{ color: 'var(--text-muted)' }}>{baseLabel(t.base_id)}</td>
+                        <td className="py-1 whitespace-nowrap" style={{ color: 'var(--text-muted)' }} title={baseTitle(t.base_id)}>{baseLabel(t.base_id)}</td>
+                        <td className="py-1" style={{ color: 'var(--text-primary)' }}
+                          title={(t.stops ?? []).map((s) => `${s.code ?? '?'} — ${s.name ?? ''}${s.city ? ` (${s.city})` : ''} : ${s.eqp} EQC`).join('\n')}>
+                          {(t.stops ?? []).length === 0
+                            ? '—'
+                            : (t.stops ?? []).map((s) => `${s.code ?? '?'}(${s.eqp})`).join(' ◆ ')}
+                        </td>
                         <td className="py-1" style={{ color: 'var(--text-muted)' }}>{t.built_on}</td>
                         <td className="py-1" style={{ color: 'var(--text-muted)' }}>{t.vehicle_type ?? '—'}</td>
                         <td className="py-1 text-right" style={{ color: 'var(--text-muted)' }}>{t.stops_count}</td>

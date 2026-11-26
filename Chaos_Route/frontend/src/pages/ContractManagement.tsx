@@ -8,13 +8,14 @@ import type { Column } from '../components/data/DataTable'
 import type { FieldDef } from '../components/data/FormDialog'
 import { useApi } from '../hooks/useApi'
 import api from '../services/api'
-import type { Contract, Region, Carrier } from '../types'
+import type { Contract, Region, Carrier, BaseLogistics } from '../types'
 import { formatDate } from '../utils/tourTimeUtils'
 
 export default function ContractManagement() {
   const { t } = useTranslation()
   const { data: regions } = useApi<Region>('/regions')
   const { data: carriers } = useApi<Carrier>('/carriers')
+  const { data: bases } = useApi<BaseLogistics>('/bases')
   const [scheduleContract, setScheduleContract] = useState<Contract | null>(null)
   const [savingSchedule, setSavingSchedule] = useState(false)
 
@@ -174,6 +175,17 @@ export default function ContractManagement() {
       key: 'region_id', label: t('common.region'), type: 'select', required: true,
       options: regions.map((r) => ({ value: String(r.id), label: r.name })),
     },
+    // Feuille de travail (#89) : où le moyen roule d'habitude, et où il peut
+    // être prêté. Indicatif : jamais bloquant au départ d'une tournée.
+    {
+      key: 'home_base_id', label: 'Site habituel (feuille de travail)', type: 'select',
+      options: bases.map((b) => ({ value: String(b.id), label: `${b.code} — ${b.name}` })),
+      helperText: 'Le moyen apparaît dans la liste Chauffeurs de ce site.',
+    },
+    {
+      key: 'loan_base_ids', label: 'Peut être prêté à (vide = tous les sites)', type: 'multicheck',
+      options: bases.map((b) => ({ value: String(b.id), label: b.code })),
+    },
     // Dates
     { key: 'start_date', label: t('common.startDate'), type: 'date' },
     { key: 'end_date', label: t('common.endDate'), type: 'date' },
@@ -226,9 +238,16 @@ export default function ContractManagement() {
             carrier_id: cid,
             billing_type: d.billing_type ? Number(d.billing_type) : null,
             trailer_supply: d.trailer_supply || null,
+            home_base_id: d.home_base_id ? Number(d.home_base_id) : null,
+            loan_base_ids: Array.isArray(d.loan_base_ids) && d.loan_base_ids.length > 0
+              ? (d.loan_base_ids as string[]).join('|') : null,
             transporter_name: carrier?.name ?? d.transporter_name ?? '',
           }
         }}
+        transformInitialData={(d) => ({
+          ...d,
+          loan_base_ids: d.loan_base_ids ? (d.loan_base_ids as string).split('|') : [],
+        })}
         formSize="lg"
       />
 

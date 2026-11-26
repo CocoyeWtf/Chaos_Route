@@ -47,6 +47,9 @@ class BaseDriver(Base, TenantMixin):
     # quelqu'un qui ne travaille pas ce jour-là. /
     # Working days as plain text; empty means the full week.
     work_days: Mapped[str | None] = mapped_column(String(40))
+    # #89 — Sites auxquels ce chauffeur peut être prêté (« 3|5 » ; vide =
+    # partout). Son site habituel reste `base_id`. Indicatif, non bloquant.
+    loan_base_ids: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # --- Contact ---
     phone: Mapped[str | None] = mapped_column(String(30))

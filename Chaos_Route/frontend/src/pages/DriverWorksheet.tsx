@@ -34,6 +34,47 @@ const DND_TYPE = 'application/x-chaos-driver'
 interface PendingAssignment {
   driver_name: string | null
   driver_code_infolog: string | null
+  /* #89 : moyen presté glissé sur la tournée (change le contrat, via
+     PUT /tours/{id}/reassign). Absent = changement de chauffeur base. */
+  contract_id?: number
+}
+
+/* #89 — Ligne du panneau Chauffeurs : chauffeur base OU moyen presté (contrat).
+   « loan » = vient d'un autre site que celui affiché ; « siteInconnu » = contrat
+   sans site habituel renseigné. / Driver panel row: base driver or contract. */
+interface PanelRow {
+  key: string
+  kind: 'driver' | 'contract'
+  id: number
+  name: string
+  code: string | null
+  trac: string | null
+  tours: number
+  km: number
+  remaining: number
+  works: boolean
+  loan: boolean
+  siteInconnu: boolean
+  title: string
+}
+
+/* « 3|5 » -> [3, 5] ; vide = prêtable partout / Loanable sites */
+function parseIds(v: string | null | undefined): number[] {
+  return (v ?? '').split('|').map(Number).filter((n) => Number.isFinite(n) && n > 0)
+}
+function loanableTo(loanIds: string | null | undefined, baseId: number): boolean {
+  const ids = parseIds(loanIds)
+  return ids.length === 0 || ids.includes(baseId)
+}
+
+/* Chevauchement horaire de deux tournées du même jour (retour après minuit géré) */
+function toursOverlap(a: Tour, b: Tour): boolean {
+  if (!a.departure_time || !a.return_time || !b.departure_time || !b.return_time) return false
+  if ((a.delivery_date || a.date) !== (b.delivery_date || b.date)) return false
+  const m = (t: string) => { const [h, mi] = t.split(':').map(Number); return h * 60 + mi }
+  const a0 = m(a.departure_time); let a1 = m(a.return_time); if (a1 <= a0) a1 += 1440
+  const b0 = m(b.departure_time); let b1 = m(b.return_time); if (b1 <= b0) b1 += 1440
+  return a0 < b1 && a1 > b0
 }
 
 interface AssignAlert {
@@ -135,6 +176,8 @@ export default function DriverWorksheet() {
   const [driverBaseFilter, setDriverBaseFilter] = useState<number | ''>('')
   const [driverSearch, setDriverSearch] = useState('')
   const [hideNoTimeLeft, setHideNoTimeLeft] = useState(false)
+  /* #89 : afficher aussi les chauffeurs / moyens d'autres sites prêtables ici */
+  const [showLoans, setShowLoans] = useState(false)
 
   const regionParams = selectedRegionId ? { region_id: selectedRegionId } : undefined
   const { data: bases } = useApi<BaseLogistics>('/bases', regionParams)
@@ -223,6 +266,13 @@ export default function DriverWorksheet() {
     return t.driver_name || null
   }, [pending])
 
+  /* Contrat effectif d'une tournée (attente prioritaire) / Effective contract */
+  const effectiveContract = useCallback((t: Tour): number | null => {
+    const p = pending.get(t.id)
+    if (p?.contract_id) return p.contract_id
+    return t.contract_id ?? null
+  }, [pending])
+
   /* Tournées affichées, triées par heure de départ puis code /
      Displayed tours, sorted by departure time then code */
   const visibleTours = useMemo(() => {
@@ -269,30 +319,70 @@ export default function DriverWorksheet() {
     [baseDrivers],
   )
 
-  /* Liste du panneau chauffeurs / Driver panel rows */
-  const driverRows = useMemo(() => {
+  /* #89 — Charge par moyen presté : les tournées confiées au contrat sans
+     tracteur propre. / Load per contract (subcontracted tours). */
+  const contractLoad = useMemo(() => {
+    const m = new Map<number, { tours: number; km: number; minutes: number }>()
+    for (const t of tours) {
+      const cid = effectiveContract(t)
+      if (!cid || t.tractor_id) continue
+      const cur = m.get(cid) ?? { tours: 0, km: 0, minutes: 0 }
+      cur.tours += 1
+      cur.km += t.total_km ?? 0
+      cur.minutes += t.total_duration_minutes ?? estimated[t.id] ?? 0
+      m.set(cid, cur)
+    }
+    return m
+  }, [tours, effectiveContract, estimated])
+
+  /* Liste du panneau chauffeurs (#89) : chauffeurs base + moyens prestés.
+     Un site choisi montre ses moyens habituels ; « Afficher aussi les prêts »
+     ajoute, en italique, ceux des autres sites prêtables ici. Jamais bloquant :
+     on peut toujours glisser un moyen d'un autre site. / Driver panel rows. */
+  const driverRows = useMemo((): PanelRow[] => {
     const q = driverSearch.trim().toLowerCase()
-    return baseDrivers
-      .filter((d) => d.status === 'ACTIVE')
-      .filter((d) => driverBaseFilter === '' || d.base_id === driverBaseFilter)
-      .map((d) => {
-        const name = driverDisplayName(d)
-        const load = driverLoad.get(name)
-        const minutes = load?.minutes ?? 0
-        return {
-          driver: d,
-          name,
-          tours: load?.tours ?? 0,
-          km: load?.km ?? 0,
-          remaining: DAY_MINUTES - minutes,
-          tractor: load?.tractor ?? null,
-          works: driverWorksOn(d.work_days, selectedDate),
-        }
+    const B = driverBaseFilter
+    const rows: PanelRow[] = []
+    for (const d of baseDrivers) {
+      if (d.status !== 'ACTIVE') continue
+      const home = B === '' || d.base_id === B
+      const loan = !home && loanableTo(d.loan_base_ids, B as number)
+      if (!home && !(showLoans && loan)) continue
+      const name = driverDisplayName(d)
+      const load = driverLoad.get(name)
+      const works = driverWorksOn(d.work_days, selectedDate)
+      rows.push({
+        key: `d${d.id}`, kind: 'driver', id: d.id, name, code: d.code_infolog || null,
+        trac: load?.tractor ?? null, tours: load?.tours ?? 0, km: load?.km ?? 0,
+        remaining: DAY_MINUTES - (load?.minutes ?? 0), works, loan: !home, siteInconnu: false,
+        title: works ? `${d.code_infolog || ''} — glisser sur une tournée` : `Repos ce jour (régime : ${d.work_days})`,
       })
-      .filter((r) => !q || r.name.toLowerCase().includes(q) || (r.driver.code_infolog || '').toLowerCase().includes(q))
+    }
+    for (const c of contracts) {
+      if (c.start_date && c.start_date > selectedDate) continue
+      if (c.end_date && c.end_date < selectedDate) continue
+      const indispo = (c.schedules ?? []).some((sc) => sc.date === selectedDate && !sc.is_available)
+      const siteInconnu = c.home_base_id == null
+      const home = B === '' || c.home_base_id === B
+      const loan = !home && loanableTo(c.loan_base_ids, B as number)
+      if (!home && !(showLoans && loan)) continue
+      const load = contractLoad.get(c.id)
+      const siteNom = c.home_base_id != null ? baseMap.get(c.home_base_id)?.code : undefined
+      rows.push({
+        key: `c${c.id}`, kind: 'contract', id: c.id,
+        name: c.vehicle_name || c.transporter_name, code: null, trac: c.code,
+        tours: load?.tours ?? 0, km: load?.km ?? 0, remaining: DAY_MINUTES - (load?.minutes ?? 0),
+        works: !indispo, loan: !home, siteInconnu,
+        title: `${c.code} — ${c.transporter_name} (presté${siteNom ? `, site ${siteNom}` : ', site habituel non renseigné'})`
+          + (indispo ? ' — indisponible ce jour' : ' — glisser sur une tournée ordonnancée'),
+      })
+    }
+    return rows
+      .filter((r) => !q || r.name.toLowerCase().includes(q) || (r.code || '').toLowerCase().includes(q) || (r.trac || '').toLowerCase().includes(q))
       .filter((r) => !hideNoTimeLeft || r.remaining > 0)
-      .sort((a, b) => a.name.localeCompare(b.name))
-  }, [baseDrivers, driverBaseFilter, driverSearch, hideNoTimeLeft, driverLoad, selectedDate])
+      /* Les moyens du site d'abord, les prêts ensuite, chacun par ordre alphabétique */
+      .sort((a, b) => (Number(a.loan) - Number(b.loan)) || a.name.localeCompare(b.name, 'fr', { numeric: true }))
+  }, [baseDrivers, contracts, baseMap, driverBaseFilter, showLoans, driverSearch, hideNoTimeLeft, driverLoad, contractLoad, selectedDate])
 
   /* --- Affectations en attente / Pending assignments --- */
 
@@ -315,15 +405,36 @@ export default function DriverWorksheet() {
     setPendingFor(tour, { driver_name: driverDisplayName(driver), driver_code_infolog: driver.code_infolog || null })
   }
 
+  /* #89 — Glisser un moyen presté = confier la tournée à ce contrat. Coût et
+     horaires sont recalculés par le serveur à la validation, ce qui exige une
+     tournée déjà ordonnancée (heure de départ). / Drop a contract on a tour. */
+  const assignContractToTour = (tourId: number, contractId: number) => {
+    const tour = tours.find((t) => t.id === tourId)
+    if (!tour) return
+    if (!tour.departure_time) {
+      setFlash({ kind: 'error', text: `${tour.code} n'est pas encore ordonnancée : choisissez son transporteur depuis l'ordonnancement.` })
+      return
+    }
+    setPending((prev) => {
+      const next = new Map(prev)
+      if (tour.contract_id === contractId && !tour.tractor_id) next.delete(tour.id)
+      else next.set(tour.id, { driver_name: null, driver_code_infolog: null, contract_id: contractId })
+      return next
+    })
+    setCheckAlerts(null)
+    setFlash(null)
+  }
+
   /* --- Glisser-déposer natif / Native drag & drop --- */
 
-  const onDriverDragStart = (e: DragEvent<HTMLElement>, d: BaseDriver, remaining: number) => {
-    e.dataTransfer.setData(DND_TYPE, String(d.id))
-    e.dataTransfer.setData('text/plain', driverDisplayName(d))
+  const onDriverDragStart = (e: DragEvent<HTMLElement>, row: PanelRow) => {
+    e.dataTransfer.setData(DND_TYPE, `${row.kind === 'contract' ? 'c' : 'd'}:${row.id}`)
+    e.dataTransfer.setData('text/plain', row.name)
     e.dataTransfer.effectAllowed = 'copy'
     /* Fantôme « 365 - BLAIMONT (reste 12:00) » / Custom drag ghost */
     const ghost = document.createElement('div')
-    ghost.textContent = `${d.code_infolog ? `${d.code_infolog} - ` : ''}${d.last_name} (reste ${fmtHM(remaining)})`
+    const prefix = row.kind === 'contract' ? row.trac : row.code
+    ghost.textContent = `${prefix ? `${prefix} - ` : ''}${row.name} (reste ${fmtHM(row.remaining)})`
     Object.assign(ghost.style, {
       position: 'fixed', top: '-1000px', left: '-1000px', padding: '4px 10px',
       background: '#f97316', color: '#fff', fontSize: '12px', fontWeight: '700',
@@ -344,15 +455,18 @@ export default function DriverWorksheet() {
   const onTourDrop = (e: DragEvent<HTMLTableRowElement>, tourId: number) => {
     e.preventDefault()
     setDropTourId(null)
-    const id = Number(e.dataTransfer.getData(DND_TYPE))
-    if (id) assignDriverToTour(tourId, id)
+    const [kind, raw] = e.dataTransfer.getData(DND_TYPE).split(':')
+    const id = Number(raw)
+    if (!id) return
+    if (kind === 'c') assignContractToTour(tourId, id)
+    else assignDriverToTour(tourId, id)
   }
 
   /* --- Contrôle et validation / Check and commit --- */
 
   const buildPayload = (dryRun: boolean) => ({
     dry_run: dryRun,
-    assignments: [...pending.entries()].map(([tour_id, p]) => ({
+    assignments: [...pending.entries()].filter(([, p]) => !p.contract_id).map(([tour_id, p]) => ({
       tour_id,
       driver_name: p.driver_name,
       driver_code_infolog: p.driver_code_infolog,
@@ -396,6 +510,21 @@ export default function DriverWorksheet() {
         out.push({ kind: 'Prestée', tourCode: t.code, text: `Tournée confiée au transporteur${c ? ` ${c.code}` : ''} : vérifier qu’un chauffeur base doit bien y être.` })
       }
     }
+    /* #89 — Moyens prestés glissés : même contrat sur deux tournées aux mêmes
+       heures, ou contrat indisponible ce jour. Signalé, jamais bloquant. */
+    for (const [tourId, p] of pending) {
+      if (!p.contract_id) continue
+      const t = tours.find((x) => x.id === tourId)
+      const c = contractMap.get(p.contract_id)
+      if (!t) continue
+      for (const o of tours) {
+        if (o.id === t.id || effectiveContract(o) !== p.contract_id || o.tractor_id) continue
+        if (toursOverlap(t, o)) out.push({ kind: 'Chevauchement', tourCode: t.code, text: `${c?.code ?? 'Ce contrat'} est aussi sur ${o.code} aux mêmes heures.` })
+      }
+      if ((c?.schedules ?? []).some((sc) => sc.date === selectedDate && !sc.is_available)) {
+        out.push({ kind: 'Indisponible', tourCode: t.code, text: `${c?.code} est marqué indisponible ce jour (calendrier du contrat).` })
+      }
+    }
     return out.sort((a, b) => a.tourCode.localeCompare(b.tourCode))
   }
 
@@ -404,7 +533,10 @@ export default function DriverWorksheet() {
     setChecking(true)
     setFlash(null)
     try {
-      const { data } = await api.post<AssignResponse>('/tours/assign-drivers', buildPayload(true))
+      const hasDrivers = [...pending.values()].some((p) => !p.contract_id)
+      const data: AssignResponse = hasDrivers
+        ? (await api.post<AssignResponse>('/tours/assign-drivers', buildPayload(true))).data
+        : { dry_run: true, alertes: [], recap: {}, introuvables: [] }
       setCheckAlerts(toDisplayAlerts(data))
     } catch (e) {
       setFlash({ kind: 'error', text: `Contrôle impossible : ${apiErrorMessage(e)}` })
@@ -418,13 +550,30 @@ export default function DriverWorksheet() {
     setSaving(true)
     setFlash(null)
     try {
-      const { data } = await api.post<AssignResponse>('/tours/assign-drivers', buildPayload(false))
+      const hasDrivers = [...pending.values()].some((p) => !p.contract_id)
+      const data: AssignResponse = hasDrivers
+        ? (await api.post<AssignResponse>('/tours/assign-drivers', buildPayload(false))).data
+        : { dry_run: false, modifies: 0, alertes: [], recap: {}, introuvables: [] }
       const alerts = toDisplayAlerts(data)
+      /* #89 — Changements de moyen presté : un par un, via la replanification
+         complète (coût, horaires, terme fixe des tournées sœurs). Le
+         chevauchement est accepté (signalé au contrôle), jamais bloquant. */
+      let contractsDone = 0
+      for (const [tourId, p] of pending) {
+        if (!p.contract_id) continue
+        const t = tours.find((x) => x.id === tourId)
+        try {
+          await api.put(`/tours/${tourId}/reassign`, { contract_id: p.contract_id }, { params: { allow_overlap: true } })
+          contractsDone += 1
+        } catch (e) {
+          alerts.push({ kind: 'Refusé', tourCode: t?.code ?? `#${tourId}`, text: apiErrorMessage(e) })
+        }
+      }
       setPending(new Map())
       setCheckAlerts(alerts.length > 0 ? alerts : null)
       setFlash({
         kind: 'ok',
-        text: `${data.modifies ?? 0} tournée(s) mise(s) à jour${alerts.length > 0 ? ` — ${alerts.length} alerte(s) à garder en tête` : ''}.`,
+        text: `${(data.modifies ?? 0) + contractsDone} tournée(s) mise(s) à jour${alerts.length > 0 ? ` — ${alerts.length} alerte(s) à garder en tête` : ''}.`,
       })
       await loadTours()
     } catch (e) {
@@ -600,6 +749,7 @@ export default function DriverWorksheet() {
                         <DriverCell
                           tour={t}
                           pendingAssignment={p}
+                          pendingContractCode={p?.contract_id ? contractMap.get(p.contract_id)?.code : undefined}
                           contractCode={contract?.code}
                           canUpdate={canUpdate}
                           onRevert={() => setPendingFor(t, undefined)}
@@ -664,12 +814,25 @@ export default function DriverWorksheet() {
         {/* Panneau chauffeurs / Driver panel */}
         <div className="w-[340px] shrink-0 rounded-lg border flex flex-col" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-secondary)', maxHeight: 'calc(100vh - 220px)' }}>
           <div className="p-2 border-b flex flex-col gap-2" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="text-sm font-bold">Chauffeurs</div>
+            <div>
+              <div className="text-sm font-bold">Chauffeurs</div>
+              <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Glisser sur une tournée · italique = prêté par un autre site</div>
+            </div>
             <select value={driverBaseFilter} onChange={(e) => setDriverBaseFilter(e.target.value ? Number(e.target.value) : '')}
               className="px-2 py-1 rounded border text-xs" style={INPUT_STYLE}>
               <option value="">Toutes les bases</option>
               {bases.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
             </select>
+            {/* #89 : moyens d'autres sites prêtables ici, en italique */}
+            <label className="flex items-center gap-2 text-xs cursor-pointer"
+              style={{ color: driverBaseFilter === '' ? 'var(--text-muted)' : 'var(--text-secondary)' }}
+              title={driverBaseFilter === ''
+                ? 'Choisissez un site pour distinguer ses moyens des prêts'
+                : 'Ajoute les chauffeurs et prestés des autres sites qui peuvent être prêtés à celui-ci (fiche contrat / chauffeur)'}>
+              <input type="checkbox" checked={showLoans} disabled={driverBaseFilter === ''}
+                onChange={(e) => setShowLoans(e.target.checked)} className="accent-orange-500" />
+              Afficher aussi les prêts
+            </label>
             <input type="text" value={driverSearch} onChange={(e) => setDriverSearch(e.target.value)}
               placeholder="Rechercher (nom, code)…" className="px-2 py-1 rounded border text-xs" style={INPUT_STYLE} />
             <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
@@ -693,19 +856,20 @@ export default function DriverWorksheet() {
                   <tr><td colSpan={5} className="p-3 text-xs" style={{ color: 'var(--text-muted)' }}>Aucun chauffeur.</td></tr>
                 ) : driverRows.map((r) => (
                   <tr
-                    key={r.driver.id}
+                    key={r.key}
                     draggable={canUpdate}
-                    onDragStart={(e) => onDriverDragStart(e, r.driver, r.remaining)}
+                    onDragStart={(e) => onDriverDragStart(e, r)}
                     onDragEnd={() => setDropTourId(null)}
                     className={canUpdate ? 'cursor-grab hover:opacity-80' : ''}
-                    style={{ opacity: r.works ? 1 : 0.55 }}
-                    title={r.works ? `${r.driver.code_infolog || ''} — glisser sur une tournée` : `Repos ce jour (régime : ${r.driver.work_days})`}
+                    style={{ opacity: r.works ? (r.loan ? 0.75 : 1) : 0.55, fontStyle: r.loan ? 'italic' : undefined }}
+                    title={r.title}
                   >
-                    <td className={td} style={{ borderColor: 'var(--border-color)' }}>{r.tractor ?? ''}</td>
+                    <td className={td} style={{ borderColor: 'var(--border-color)' }}>{r.trac ?? ''}</td>
                     <td className={td} style={{ borderColor: 'var(--border-color)' }}>
-                      <span className="font-semibold">{r.name}</span>
-                      {r.driver.code_infolog && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{r.driver.code_infolog}</span>}
-                      {!r.works && <span className="ml-1 text-[10px] font-bold" style={{ color: 'var(--color-warning)' }}>repos</span>}
+                      <span className={r.loan ? '' : 'font-semibold'}>{r.name}</span>
+                      {r.code && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{r.code}</span>}
+                      {r.loan && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>· prêt{r.siteInconnu ? ' (site ?)' : ''}</span>}
+                      {!r.works && <span className="ml-1 text-[10px] font-bold" style={{ color: 'var(--color-warning)' }}>{r.kind === 'contract' ? 'indispo' : 'repos'}</span>}
                     </td>
                     <td className={`${td} text-right`} style={{ borderColor: 'var(--border-color)' }}>{r.tours}</td>
                     <td className={`${td} text-right`} style={{ borderColor: 'var(--border-color)' }}>{fmtKm(r.km)}</td>
@@ -727,15 +891,28 @@ export default function DriverWorksheet() {
 }
 
 /* Cellule « Chauffeur » d'une tournée / Tour driver cell */
-function DriverCell({ tour, pendingAssignment, contractCode, canUpdate, onRevert, onClear }: {
+function DriverCell({ tour, pendingAssignment, pendingContractCode, contractCode, canUpdate, onRevert, onClear }: {
   tour: Tour
   pendingAssignment: PendingAssignment | undefined
+  pendingContractCode?: string
   contractCode: string | undefined
   canUpdate: boolean
   onRevert: () => void
   onClear: () => void
 }) {
   const btn = 'ml-1 px-1 text-[11px] leading-none rounded hover:opacity-70 shrink-0'
+  if (pendingAssignment?.contract_id) {
+    /* #89 : moyen presté en attente / Pending contract change */
+    return (
+      <div className="flex items-center min-w-0">
+        <span className="italic font-semibold truncate" style={{ color: 'var(--color-primary)' }}
+          title={`Contrat en attente${contractCode ? ` (avant : ${contractCode})` : ''}`}>
+          {pendingContractCode ?? `#${pendingAssignment.contract_id}`} (presté)
+        </span>
+        <button className={btn} style={{ color: 'var(--color-primary)' }} onClick={onRevert} title="Annuler cette affectation en attente">×</button>
+      </div>
+    )
+  }
   if (pendingAssignment) {
     /* En attente : orange italique ; × annule l'attente / Pending: orange italic */
     return (

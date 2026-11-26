@@ -283,6 +283,8 @@ export function driverWorksOn(workDays: string | null | undefined, isoDate: stri
 
 export interface BaseDriver {
   id: number
+  /* #89 — sites auxquels il peut être prêté (« 3|5 », vide = partout) */
+  loan_base_ids?: string | null
   /* Régime de travail (#33) : « LUN,MAR,MER,JEU,VEN ». Vide = semaine complète. */
   work_days?: string | null
   last_name: string
@@ -573,6 +575,9 @@ export interface Contract {
   trailer_supply?: 'CARRIER' | 'CMRO' | 'BOTH' | null
   schedules?: ContractSchedule[]
   carrier_id?: number
+  /* #89 — site habituel et sites de prêt (« 3|5 », vide = partout) */
+  home_base_id?: number | null
+  loan_base_ids?: string | null
   carrier?: Carrier
 }
 

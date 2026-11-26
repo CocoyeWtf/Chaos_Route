@@ -17,6 +17,9 @@ interface DuplicateInfo {
 interface BaseWarning {
   importing_base: string
   other_bases: { base: string; count: number }[]
+  /* #87 suite : volumes déjà présents sur la MÊME base ce jour-là, à une autre
+     heure de répartition (le doublon exact compare aussi l'heure). */
+  same_base?: { base: string; dispatch_time: string; count: number }[]
   new_row_count: number
 }
 
@@ -269,10 +272,20 @@ export function ImportDialog({ open, onClose, entityType, onSuccess }: ImportDia
               <p className="text-sm font-semibold" style={{ color: 'var(--color-warning)' }}>
                 Vous importez {baseWarning.new_row_count} ligne(s) sur <strong>{baseWarning.importing_base}</strong>
               </p>
-              <p className="text-xs" style={{ color: 'var(--text-primary)' }}>
-                Ce jour porte déjà des volumes de : {baseWarning.other_bases.map((b) => `${b.base} (${b.count})`).join(', ')}.
-                Vérifiez que la base d'origine est la bonne.
-              </p>
+              {(baseWarning.same_base ?? []).length > 0 && (
+                <p className="text-xs font-semibold" style={{ color: 'var(--color-danger)' }}>
+                  ⚠ {(baseWarning.same_base ?? []).reduce((n, b) => n + b.count, 0)} ligne(s) de volumes sont déjà
+                  dans le système pour {[...new Set((baseWarning.same_base ?? []).map((b) => b.base))].join(', ')} ce jour-là
+                  (répartition de {(baseWarning.same_base ?? []).map((b) => `${b.dispatch_time || 'heure inconnue'} : ${b.count}`).join(', ')}).
+                  Importer ajoutera ces lignes en plus — risque de doublon.
+                </p>
+              )}
+              {baseWarning.other_bases.length > 0 && (
+                <p className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                  Ce jour porte déjà des volumes de : {baseWarning.other_bases.map((b) => `${b.base} (${b.count})`).join(', ')}.
+                  Vérifiez que la base d'origine est la bonne.
+                </p>
+              )}
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={() => { setBaseWarning(null); doImport('append') }}

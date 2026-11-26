@@ -163,3 +163,29 @@ async def test_une_tournee_ordinaire_n_est_pas_au_pot(client, db_session, base):
     })
     assert resp.status_code == 201, resp.text
     assert resp.json()["pooled"] is False
+
+
+@pytest.mark.asyncio
+async def test_125_le_pot_detaille_les_pdv_de_chaque_tournee(client, db_session, base, test_region):
+    """#125 — « Afin de savoir quel tour nous devons planifier du pot, il nous
+    faudrait le détail des PDV se trouvant dans le tour. » Dans l'ordre de passage."""
+    from app.models.pdv import PDV, PDVType
+    from app.models.tour_stop import TourStop
+
+    t = await _tour(db_session, base, pooled=True)
+    sfx = uuid.uuid4().hex[:4].upper()
+    p1 = PDV(code=f"A{sfx}", name="Premier", type=PDVType.HYPER, city="Mons", region_id=test_region.id)
+    p2 = PDV(code=f"B{sfx}", name="Second", type=PDVType.HYPER, city="Namur", region_id=test_region.id)
+    db_session.add_all([p1, p2])
+    await db_session.commit()
+    db_session.add_all([
+        TourStop(tour_id=t.id, pdv_id=p2.id, sequence_order=2, eqp_count=12),
+        TourStop(tour_id=t.id, pdv_id=p1.id, sequence_order=1, eqp_count=20),
+    ])
+    await db_session.commit()
+
+    resp = await client.get("/api/tours/pooled", params={"base_id": base.id})
+    assert resp.status_code == 200, resp.text
+    stops = resp.json()["tours"][0]["stops"]
+    assert [s["code"] for s in stops] == [f"A{sfx}", f"B{sfx}"]
+    assert stops[0]["eqp"] == 20 and stops[1]["city"] == "Namur"

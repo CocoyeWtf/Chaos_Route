@@ -59,6 +59,11 @@ export default function BaseDriverManagement() {
       key: 'work_days', label: 'Jours travaillés (vide = semaine complète)', type: 'multicheck',
       options: WEEK_DAYS.map((d) => ({ value: d, label: d })),
     },
+    {
+      /* #89 : feuille de travail — sites où ce chauffeur peut être prêté. */
+      key: 'loan_base_ids', label: 'Peut être prêté à (vide = tous les sites)', type: 'multicheck',
+      options: bases.map((b) => ({ value: String(b.id), label: b.code })),
+    },
     { key: 'phone', label: 'Téléphone', type: 'text' },
     { key: 'email', label: 'Email', type: 'text' },
     { key: 'notes', label: 'Notes', type: 'textarea' },
@@ -82,11 +87,14 @@ export default function BaseDriverManagement() {
           ...d,
           base_id: Number(d.base_id),
           work_days: jours && jours.length > 0 ? jours.join(',') : null,
+          loan_base_ids: Array.isArray(d.loan_base_ids) && d.loan_base_ids.length > 0
+            ? (d.loan_base_ids as string[]).join('|') : null,
         }
       }}
       transformInitialData={(d) => ({
         ...d,
         work_days: d.work_days ? (d.work_days as string).split(',') : [],
+        loan_base_ids: d.loan_base_ids ? (d.loan_base_ids as string).split('|') : [],
       })}
     />
   )

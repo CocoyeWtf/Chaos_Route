@@ -1,5 +1,8 @@
 """Ticket #34 : format de la date dans l'export TMS vers WMS.
 
+Mis à jour le 27/11 (#106) : la référence est désormais le fichier que le
+trafic utilise réellement avec la macro (transmis par Gaetan).
+
 La colonne E sortait en horodatage — « 2026-08-13 0:00:00 » — alors que la macro
 d'encodage Infolog attend une date nue, affichée JJ-MM-AA. Le reste du fichier
 était correct, seule la cellule de date posait problème.
@@ -62,11 +65,29 @@ async def test_date_livraison_est_une_date_au_format_jjmmaa(client, db_session, 
     # Une date nue : pas de composante horaire résiduelle
     assert getattr(valeur, "hour", 0) == 0 and getattr(valeur, "minute", 0) == 0
     assert valeur.isoformat().startswith(LIVRAISON)
-    # #106 : jj/mm/aaaa avec des « / » littéraux (la macro Infolog est stricte)
-    assert cellule.number_format == r"dd\/mm\/yyyy"
-    # H au format texte, I = ordre du PDV dans la tournée (plus le code CMRO)
-    assert ws.cell(ligne, 8).number_format == "@"
-    assert ws.cell(ligne, 9).value == 1
+    # #106 (27/11) : format exact du fichier de référence du trafic — jj-mm-aa
+    assert cellule.number_format == r"dd\-mm\-yy"
+    # H en format Standard (une chaîne), et pas de colonne I
+    assert ws.cell(ligne, 8).number_format == "General"
+    assert ws.cell(ligne, 8).value == "06:00:00"
+    assert ws.max_column == 8
+    # Nom fixe : la macro n'ouvre que « TMS_vers_wms.xlsx »
+    assert 'filename="TMS_vers_wms.xlsx"' in resp.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
+async def test_tournee_sans_code_chauffeur_signalee(client, db_session, test_region):
+    """Colonne C vide = la macro décale : le trafic doit être prévenu, et la
+    cellule reste vraiment vide (pas une chaîne vide)."""
+    base_id, pdv_code = await _fixture(db_session, test_region.id)
+
+    resp = await client.get("/api/exports/wms-infolog", params={"date": PLANIF, "base_id": base_id})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-wms-tours-sans-chauffeur"].startswith("T-")
+
+    ws = load_workbook(io.BytesIO(resp.content)).active
+    ligne = next(r for r in range(1, ws.max_row + 1) if ws.cell(r, 2).value == pdv_code)
+    assert ws.cell(ligne, 3).value is None
 
 
 @pytest.mark.asyncio

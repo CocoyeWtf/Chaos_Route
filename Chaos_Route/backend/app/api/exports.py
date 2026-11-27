@@ -74,13 +74,13 @@ async def export_wms_infolog(
     D = code transporteur · E = date de livraison · F = heure de départ ·
     G = index global (décroissant par tour) · H = heure de départ (texte).
 
-    Colonne I = ordre du PDV dans sa tournée (#106), décroissant comme les
-    lignes. Elle portait le code CMRO (#104) pour recoller les numéros Infolog
-    au retour ; Samuel a retenu le circuit ERT rempli à la main pour ce retour
-    (l'export ERT porte, lui, la colonne « Code CMRO »), et la macro Infolog
-    refuse tout contenu inconnu. Format exigé par la macro : E = date
-    jj/mm/aaaa avec des « / », H = texte, aucun en-tête ni mise en page. /
-    Column I = PDV delivery order in its tour (#106); E dd/mm/yyyy; H text.
+    Référence (#106, 27/11) : le fichier que le trafic utilise AUJOURD'HUI avec
+    la macro, transmis par Gaetan. On le reproduit cellule par cellule :
+    8 colonnes seulement (PAS de colonne I), E = date au format « jj-mm-aa »,
+    tout le texte en format Standard (H compris), fichier nommé exactement
+    « TMS_vers_wms.xlsx ». Les consignes précédentes (E en jj/mm/aaaa, H en
+    Texte, colonne I = ordre du PDV) faisaient planter la macro par décalage.
+    / Mirrors, cell by cell, the file the macro actually runs on today.
     """
     # ── Code transporteur (paramètre global configurable) ────────────────────
     carrier_param = await db.execute(
@@ -135,6 +135,7 @@ async def export_wms_infolog(
 
     global_index = 0
     rank = 0
+    sans_chauffeur: list[str] = []
     for tour in tours:
         rank += 1
         ordre = tour.priority if tour.priority is not None else rank
@@ -162,6 +163,10 @@ async def export_wms_infolog(
             delivery_date_val = delivery_date_str
 
         dep_text = _hhmmss(tour.departure_time)
+        # C vide = ligne que la macro ne sait pas encoder : on le signale au
+        # trafic plutôt que de le laisser découvrir le plantage dans Infolog.
+        if not tour.driver_code_infolog:
+            sans_chauffeur.append(tour.wms_tour_code or tour.code)
 
         # Inverser : le dernier PDV livré (sequence max) en premier /
         # Reverse: last delivered PDV (max sequence) first
@@ -175,30 +180,40 @@ async def export_wms_infolog(
                 # n'écrit pas un Decimal comme un nombre.
                 float(ordre) if ordre is not None else None,  # A
                 pdv_code,                           # B
-                tour.driver_code_infolog or "",     # C
+                # None et non "" : une chaîne vide écrit une cellule texte vide,
+                # absente du fichier de référence.
+                tour.driver_code_infolog or None,   # C
                 carrier_code,                       # D
                 delivery_date_val,                  # E
                 dep_text,                           # F
                 idx,                                # G
-                dep_text,                           # H
-                delivery_rank,                      # I — ordre du PDV dans la tournée (#106)
+                dep_text,                           # H (format Standard, comme F)
             ])
-            # E : jj/mm/aaaa avec des « / » LITTÉRAUX (#106, la macro est
-            # stricte) — échappés pour ne pas suivre le séparateur régional. /
-            # Literal slashes regardless of the regional date separator.
+            # E : « jj-mm-aa », format exact du fichier de référence (#106),
+            # tirets échappés pour ne pas suivre le séparateur régional. /
+            # Exact format of the reference file, literal dashes.
             if isinstance(delivery_date_val, date_type):
-                ws.cell(ws.max_row, 5).number_format = r"dd\/mm\/yyyy"
-            # H : cellule au format texte (#106) / Text-formatted cell
-            ws.cell(ws.max_row, 8).number_format = "@"
+                ws.cell(ws.max_row, 5).number_format = r"dd\-mm\-yy"
+
+    # Largeur de E reprise du fichier de référence (sinon « ##### » à l'écran)
+    ws.column_dimensions["E"].width = 11.43
 
     content = io.BytesIO()
     wb.save(content)
     content.seek(0)
-    filename = f"TMS_vers_wms_{date}.xlsx"
+    # Nom FIXE (#106) : la macro ouvre « TMS_vers_wms.xlsx » et rien d'autre ;
+    # le fichier est écrasé chaque jour. / Fixed name, the macro expects it.
+    filename = "TMS_vers_wms.xlsx"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        # Tournées sans code chauffeur Infolog (colonne C vide), pour alerter
+        # le trafic côté écran. / Tours missing the Infolog driver code.
+        "X-Wms-Tours-Sans-Chauffeur": ",".join(sans_chauffeur)[:2000],
+    }
     return StreamingResponse(
         content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=headers,
     )
 
 

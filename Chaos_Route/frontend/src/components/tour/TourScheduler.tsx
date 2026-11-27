@@ -1108,11 +1108,21 @@ export function TourScheduler({ selectedDate, onDateChange, embeddedMode }: Tour
       const url = URL.createObjectURL(res.data as Blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `TMS_vers_wms_${selectedDate}.xlsx`
+      // Nom FIXE (#106) : la macro Infolog n'ouvre que « TMS_vers_wms.xlsx »
+      a.download = 'TMS_vers_wms.xlsx'
       document.body.appendChild(a)
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
+      // Colonne C vide = la macro décale et plante (#106) : prévenir avant l'encodage
+      const sansChauffeur = String(res.headers['x-wms-tours-sans-chauffeur'] ?? '').trim()
+      if (sansChauffeur) {
+        alert(
+          "Attention : ces tournées n'ont pas de code chauffeur Infolog (colonne C vide). " +
+          'La macro ne pourra pas les encoder — placez les chauffeurs puis réexportez :\n\n' +
+          sansChauffeur.split(',').join(', '),
+        )
+      }
     } catch (e) {
       console.error('Failed to export WMS Infolog', e)
       alert("Échec de l'export Infolog (WMS).")

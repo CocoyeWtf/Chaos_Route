@@ -70,16 +70,15 @@ def _ligne(ws, entetes: dict, code: str) -> int:
 
 @pytest.mark.asyncio
 async def test_l_export_wms_ne_porte_plus_le_code_cmro(client, db_session, test_region, test_pdv):
-    """#106 — Samuel a retenu le circuit ERT pour le retour des numeros, et la
-    macro Infolog refuse tout contenu inconnu : la colonne I porte l'ordre du
-    PDV dans sa tournee, plus le code CMRO (qui reste dans l'export ERT)."""
+    """#106 — le retour des numeros passe par l'export ERT (code CMRO). L'export
+    WMS reproduit le fichier de reference du trafic : 8 colonnes, rien en I."""
     tour = await _tour(db_session, test_region, test_pdv, jour="2026-10-12")
     resp = await client.get("/api/exports/wms-infolog", params={"date": tour.date})
     assert resp.status_code == 200, resp.text
     ws = _classeur(resp.content).active
-    colonne_i = {ws.cell(l, 9).value for l in range(1, ws.max_row + 1)}
-    assert tour.code not in colonne_i
-    assert colonne_i <= set(range(1, 100))
+    assert ws.max_column == 8
+    assert all(ws.cell(l, c).value != tour.code
+               for l in range(1, ws.max_row + 1) for c in range(1, 9) if c != 2)
     # Les colonnes que lit la macro ne doivent PAS avoir bouge
     assert ws.cell(1, 2).value is not None       # B = code PDV
     assert ws.cell(1, 7).value is not None       # G = index global

@@ -44,6 +44,8 @@ Usage :
     python -m scripts.import_matrice_bases chemin/Matrice.xlsx --matrix-code 2785 --matrix-code 3252
     # relire le rapport, puis :
     python -m scripts.import_matrice_bases chemin/Matrice.xlsx --matrix-code 2785 --matrix-code 3252 --apply
+    # trajets base <-> base pour les navettes (#123) :
+    ... --other-base 80=080 --other-base 92=092 --other-base "92=092 MEA"
 """
 
 from __future__ import annotations
@@ -166,7 +168,8 @@ def read_matrix(path: str) -> Matrix:
     return mx
 
 
-async def run(path: str, matrix_codes: list[str], mapping: dict[str, str], tenant_id: int, apply: bool) -> None:
+async def run(path: str, matrix_codes: list[str], mapping: dict[str, str], tenant_id: int, apply: bool,
+              other_bases: list[tuple[str, str]] = ()) -> None:
     from sqlalchemy import or_, select
 
     from app.database import async_session, set_session_tenant
@@ -234,6 +237,19 @@ async def run(path: str, matrix_codes: list[str], mapping: dict[str, str], tenan
             else:
                 unknown.append(mx.labels[i])
 
+        # 2bis. Autres bases (#123) : une navette Villers -> Trazegnies cherche un
+        # trajet BASE -> BASE. Or le code 80 de la matrice designe a la fois le
+        # magasin 80 et la base 080 : par defaut il est pris comme magasin. On
+        # ajoute donc explicitement chaque base voulue, sous une cle distincte
+        # « code_matrice@code_base » (le 92 sert a Gosselies SEC ET MEA).
+        for mc, base_code in other_bases:
+            mc = norm_code(mc)
+            found = [b for b in bases if b.code.strip().lower() == base_code.strip().lower()]
+            if mc not in positions or len(found) != 1:
+                raise SystemExit(f"ABANDON : --other-base {mc}={base_code} introuvable. Aucune ecriture.")
+            counterparts[f"{mc}@{found[0].code}"] = ("BASE", found[0].id, found[0].name)
+            _log(f"Autre base : matrice {mc} ({mx.labels[positions[mc]]}) -> base {found[0].code} « {found[0].name} »")
+
         # 3. Lignes existantes impliquant les bases ciblees
         ids = [b.id for b in targets.values()]
         def _touching(model):
@@ -285,8 +301,9 @@ async def run(path: str, matrix_codes: list[str], mapping: dict[str, str], tenan
             key = (ta, ia, tb, ib)
             label = f"{na} -> {nb}"
 
-            km, rev_km = mx.get("km", a, b)
-            mn, rev_mn = mx.get("minutes", a, b)
+            ma, mb = a.split("@", 1)[0], b.split("@", 1)[0]  # code matrice
+            km, rev_km = mx.get("km", ma, mb)
+            mn, rev_mn = mx.get("minutes", ma, mb)
             is_est = False
             fit = fits.get(a if a in targets else b)
             if km is not None and mn is None and fit is not None:
@@ -322,7 +339,7 @@ async def run(path: str, matrix_codes: list[str], mapping: dict[str, str], tenan
                     else:
                         stats["dm_same"] += 1
 
-            tx, rev_tx = mx.get("tax", a, b)
+            tx, rev_tx = mx.get("tax", ma, mb)
             if tx is None:
                 stats["tx_missing"] += 1
                 missing.setdefault("taxe", []).append(label)
@@ -388,6 +405,9 @@ def main() -> None:
                    help="Code de la base dans la matrice (ex. 2785). Repetable.")
     p.add_argument("--map", action="append", default=[],
                    help="Forcer la correspondance code_matrice=code_base (ex. 2785=TRZ).")
+    p.add_argument("--other-base", action="append", default=[],
+                   help="Ecrire aussi les trajets vers une autre base : code_matrice=code_base "
+                        "(ex. 80=080, 92=092, « 92=092 MEA »). Repetable.")
     p.add_argument("--tenant", type=int, default=1, help="Tenant cible (defaut 1 = Belgique)")
     p.add_argument("--apply", action="store_true", help="Ecrire (sinon simulation)")
     args = p.parse_args()
@@ -395,7 +415,8 @@ def main() -> None:
     for m in args.map:
         k, _, v = m.partition("=")
         mapping[norm_code(k)] = v.strip()
-    asyncio.run(run(args.file, args.matrix_code, mapping, args.tenant, args.apply))
+    other = [tuple(x.split("=", 1)) for x in args.other_base]
+    asyncio.run(run(args.file, args.matrix_code, mapping, args.tenant, args.apply, other))
 
 
 if __name__ == "__main__":
